@@ -1,0 +1,13 @@
+# Dependencies are resolved by the harness profile that links this package.
+node_modules/
+
+# Test and editor droppings.
+*.log
+.DS_Store
+
+# Profile backups written next to a hand-edited manifest.
+*.bak-*
+
+# The plugin's own durable state belongs in the harness home, never here.
+hotkey.json
+history/

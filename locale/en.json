@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mac Tools",
+    "description": "A local macOS toolbox panel in one plugin: QQ-style screenshot capture with native region/window selection, crop, arrows, shapes, text, mosaic and highlight annotations; a calculator; and clipboard and system-information panels. Panel-only — it registers no agent tools."
+  }
+}

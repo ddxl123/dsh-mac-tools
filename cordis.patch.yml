@@ -1,0 +1,59 @@
+# The dsh-mac-tools bundle patch.
+#
+# A dsh profile composes its plugin tree as ordered layers: every package in
+# `dsh.profile.bundles` contributes the `dsh.bundle.patch` its package.json
+# names, then the profile's own `cordis.patch.yml`, then any `--patch` overlay.
+# This package declares itself a bundle, so installing it is one
+# `plugin_manager` `install_bundle` call against this directory.
+#
+# The row is host-plane, not preset-plane: one instance owns the temporary
+# screenshot registry, the `/api/dsh-mac-tools` route and the model-facing
+# tools, so every browser window and every session sees the same capability.
+# Nothing here is per-session state.
+#
+# Every value below is overridable from a later layer (the active profile's
+# `cordis.patch.yml` or a `--patch` overlay); a patch replaces a row's whole
+# `config`, so restate every key you need. Anything omitted falls back to the
+# plugin's documented default.
+
+- insert:
+    - id: mac-tools
+      name: 'dsh-mac-tools'
+      config:
+        # Where the panel's "save" action and the global-hotkey capture write
+        # PNG files. Empty means the default (`~/Pictures/DSH Mac Tools`).
+        # `~` is expanded.
+        saveDirectory: ''
+        # How many captures stay available in the temporary registry before
+        # the oldest is pruned. Saved files are never pruned.
+        maxShots: 20
+        # How long an interactive capture (native region/window selection) may
+        # wait for the operator before it is cancelled.
+        interactiveTimeoutMs: 180000
+        # Hide the DeepSeek Harness window while a screen capture runs (when it
+        # is the frontmost app), so the window does not cover the target, and
+        # restore it afterwards. The panel has a per-capture toggle; this is the
+        # default it starts with.
+        hideAppDuringCapture: true
+        # Default system-wide screenshot shortcut (works while other apps have
+        # focus). Syntax: modifiers+key, e.g. 'ctrl+alt+a', 'ctrl+shift+a',
+        # 'primary+shift+s'. Empty string starts with no global shortcut. The
+        # panel can change it at runtime: the choice is stored in
+        # <profile home>/dsh-mac-tools/hotkey.json, takes precedence over this
+        # value, and "reset to default" removes it again. The native helper is
+        # compiled once from assets/hotkey.swift (needs Xcode Command Line
+        # Tools the first time); the result is copied to the clipboard and
+        # saved. The in-panel quick shortcut (Shift+Cmd+A) keeps working either
+        # way.
+        globalHotkey: 'ctrl+alt+a'
+        # Play the macOS Glass sound after a successful global-hotkey capture.
+        globalHotkeySound: true
+        # How many screenshots the panel's history keeps. Every capture — panel
+        # or global shortcut — is copied into the history directory; older ones
+        # are deleted beyond this limit.
+        historyLimit: 60
+        # Also pin the global-hotkey screenshot to the screen (always-on-top
+        # floating image). On by default: pressing the shortcut leaves the
+        # captured region pinned; Esc closes it. The panel editor also offers an
+        # explicit "pin" button. Set false to only copy and save.
+        pinAfterGlobalCapture: true
