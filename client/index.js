@@ -7,11 +7,11 @@
  *     which the shell opens through `layout.selectPanel(id)`.
  *   - `main` keyed by the same id — the panel page itself: a QQ-style screenshot
  *     tab (native capture, window picker, crop and annotation editor), a
- *     calculator driven by the Host's own evaluator, a system-information
- *     dashboard, a live status tab (CPU / memory / disk / network / battery
- *     charts, SMC temperature sensors, fan control, process ranking, threshold
- *     alerts), and a phone-transfer tab that starts a temporary LAN page a
- *     phone can open by QR code to exchange text, files and screenshots.
+ *     calculator driven by the Host's own evaluator, a live status tab (CPU /
+ *     memory / disk / network / battery charts, SMC temperature sensors, the
+ *     merged system-information section, fan control, process ranking and
+ *     threshold alerts), and a phone-transfer tab that starts a temporary LAN
+ *     page a phone can open by QR code to exchange text, files and screenshots.
  *   - two global shortcuts: `primary+alt+KeyM` toggles the panel, and
  *     `primary+shift+KeyA` starts an interactive capture and brings the panel
  *     forward with the editor already mounted.
@@ -19,8 +19,8 @@
  * ## Where state lives
  *
  * The Host half owns every durable thing: the temporary shot registry, the
- * calculator engine, the clipboard, system facts and the `/api/dsh-mac-tools`
- * route. This half owns only view state — this plugin is panel-only and
+ * calculator engine, the clipboard, live-status snapshots and the
+ * `/api/dsh-mac-tools` route. This half owns only view state — this plugin is panel-only and
  * registers no agent tools. The one instance
  * of it is created in `apply()` — a module-level store handed to the panel and
  * to the shortcut handlers — so a capture started from the keyboard reaches
@@ -64,11 +64,9 @@ window.__ModuleLoader__.load({
     const API_PATH = '/api/dsh-mac-tools'
 
     /** The tab order used by the tablist and its arrow-key navigation. */
-    const TABS = ['screenshot', 'calculator', 'system', 'monitor', 'transfer']
+    const TABS = ['screenshot', 'calculator', 'monitor', 'transfer']
     /** How many successful evaluations the calculator remembers. */
     const CALC_HISTORY_LIMIT = 10
-    /** How often the system tab refreshes while it is the visible tab. */
-    const SYSTEM_POLL_MS = 10000
     /** How often the transfer tab polls the session state while visible. */
     const TRANSFER_STATUS_POLL_MS = 2000
     /** How often the transfer tab polls its two item lists while visible. */
@@ -169,6 +167,16 @@ window.__ModuleLoader__.load({
       'daemon-unreachable': 'monitor.fan.reason.daemon-unreachable',
       'not-installed': 'monitor.fan.reason.not-installed',
     }
+    /** The capability rows of the merged 系统信息 section, in display order. */
+    const MONITOR_SYSTEM_CAPABILITIES = [
+      ['screenshot', 'monitor.system.capability.screenshot'],
+      ['hideApp', 'monitor.system.capability.hideApp'],
+      ['pin', 'monitor.system.capability.pin'],
+      ['history', 'monitor.system.capability.history'],
+      ['transfer', 'monitor.system.capability.transfer'],
+      ['monitor', 'monitor.system.capability.monitor'],
+      ['fanControl', 'monitor.system.capability.fanControl'],
+    ]
     /** Alert event metric -> locale key. */
     const MONITOR_ALERT_METRIC_KEYS = {
       cpu: 'monitor.alerts.metric.cpu',
@@ -193,7 +201,7 @@ window.__ModuleLoader__.load({
     const zh = {
       'panel': 'Mac 工具箱',
       'title': 'Mac 工具箱',
-      'subtitle': '截图与标注、计算器、手机互传、系统信息、运行状态 —— 全部在本机完成。',
+      'subtitle': '截图与标注、计算器、运行状态监控、手机互传 —— 全部在本机完成。',
       'hostAria': 'Host 连接状态',
       'host.loading': '正在连接本地 Host…',
       'host.ready': 'Host 已连接 · v{version}',
@@ -205,7 +213,6 @@ window.__ModuleLoader__.load({
       'tabs.aria': 'Mac 工具箱分区',
       'tab.screenshot': '截图',
       'tab.calculator': '计算器',
-      'tab.system': '系统信息',
       'tab.transfer': '手机互传',
       'common.close': '关闭',
       'common.retry': '重试',
@@ -365,42 +372,20 @@ window.__ModuleLoader__.load({
       'calc.error.domain_error': '函数定义域错误：{message}',
       'calc.error.too_long': '表达式过长。',
       'calc.error.generic': '计算失败：{message}',
-      'system.refresh': '刷新',
-      'system.refreshing': '正在刷新…',
-      'system.loading': '正在读取系统信息…',
-      'system.error': '无法读取系统信息：{message}',
       'system.os': '系统',
-      'system.cpu': 'CPU',
-      'system.memory': '内存',
-      'system.disk': '磁盘',
-      'system.battery': '电池',
       'system.uptime': '运行时间',
-      'system.host': 'Host',
       'system.hostname': '主机名',
       'system.arch': '架构',
       'system.version': '版本',
       'system.cores': '{count} 核',
-      'system.model': '型号',
+      'system.model': '型号标识',
       'system.coresLabel': '核心数',
-      'system.used': '已用',
-      'system.level': '电量',
-      'system.memoryUsed': '已用 {used} / 共 {total}',
-      'system.diskUsed': '已用 {used} / 共 {total}',
-      'system.diskFree': '可用 {free}',
-      'system.mount': '挂载点 {mount}',
-      'system.usedPercent': '已用 {percent}%',
-      'system.batteryCharging': '正在充电',
-      'system.batteryRemaining': '剩余 {duration}',
-      'system.batteryCharged': '已充满',
-      'system.batteryUnknown': '剩余时间未知',
       'system.uptimeValue': '已运行 {duration}',
-      'system.capabilityScreenshot': '截图能力',
       'system.available': '可用',
       'system.unavailable': '不可用',
       'system.saveDirectory': '保存目录',
       'system.capturedAt': '取样于 {time}',
       'system.unknown': '未知',
-      'system.empty': '暂无数据',
       'duration.day': '{n} 天',
       'duration.hour': '{n} 小时',
       'duration.minute': '{n} 分',
@@ -692,12 +677,31 @@ window.__ModuleLoader__.load({
       'monitor.alerts.error.invalid': '请输入有效范围内的数值。',
       'monitor.alerts.error.generic': '告警操作失败（{code}）：{message}',
       'monitor.alerts.unavailable': '告警设置不可用',
+      'monitor.system.title': '系统信息',
+      'monitor.system.hardware': '系统与硬件',
+      'monitor.system.runtime': '运行时',
+      'monitor.system.capabilities': '能力',
+      'monitor.system.chip': '芯片',
+      'monitor.system.coresDetail': '{count}（{performance} 性能 + {efficiency} 能效）',
+      'monitor.system.hostPid': 'Host 进程 ID',
+      'monitor.system.sampledAt': '取样时间',
+      'monitor.system.interval': '采样间隔',
+      'monitor.system.polling': '轮询状态',
+      'monitor.system.pollingActive': '轮询中',
+      'monitor.system.capability.screenshot': '截图',
+      'monitor.system.capability.hideApp': '截图时隐藏应用',
+      'monitor.system.capability.pin': '贴图窗口',
+      'monitor.system.capability.history': '截图历史',
+      'monitor.system.capability.transfer': '手机互传',
+      'monitor.system.capability.monitor': '运行状态监控',
+      'monitor.system.capability.fanControl': '风扇控制',
+      'monitor.system.note': '内存、磁盘、电池、CPU 与网络数据可在上方概览卡片中查看。',
     }
 
     const en = {
       'panel': 'Mac Tools',
       'title': 'Mac Tools',
-      'subtitle': 'Screenshots and annotations, a calculator, phone transfer, system information and live status — all local.',
+      'subtitle': 'Screenshots and annotations, a calculator, live status monitoring and phone transfer — all local.',
       'hostAria': 'Host connection status',
       'host.loading': 'Connecting to the local Host…',
       'host.ready': 'Host connected · v{version}',
@@ -709,7 +713,6 @@ window.__ModuleLoader__.load({
       'tabs.aria': 'Mac Tools sections',
       'tab.screenshot': 'Screenshot',
       'tab.calculator': 'Calculator',
-      'tab.system': 'System',
       'tab.transfer': 'Phone',
       'common.close': 'Close',
       'common.retry': 'Retry',
@@ -869,42 +872,20 @@ window.__ModuleLoader__.load({
       'calc.error.domain_error': 'Domain error: {message}',
       'calc.error.too_long': 'The expression is too long.',
       'calc.error.generic': 'Evaluation failed: {message}',
-      'system.refresh': 'Refresh',
-      'system.refreshing': 'Refreshing…',
-      'system.loading': 'Reading system information…',
-      'system.error': 'Cannot read system information: {message}',
       'system.os': 'System',
-      'system.cpu': 'CPU',
-      'system.memory': 'Memory',
-      'system.disk': 'Disk',
-      'system.battery': 'Battery',
       'system.uptime': 'Uptime',
-      'system.host': 'Host',
       'system.hostname': 'Hostname',
       'system.arch': 'Architecture',
       'system.version': 'Version',
       'system.cores': '{count} cores',
-      'system.model': 'Model',
+      'system.model': 'Model identifier',
       'system.coresLabel': 'Cores',
-      'system.used': 'Used',
-      'system.level': 'Level',
-      'system.memoryUsed': '{used} used of {total}',
-      'system.diskUsed': '{used} used of {total}',
-      'system.diskFree': '{free} free',
-      'system.mount': 'Mounted at {mount}',
-      'system.usedPercent': '{percent}% used',
-      'system.batteryCharging': 'Charging',
-      'system.batteryRemaining': '{duration} remaining',
-      'system.batteryCharged': 'Fully charged',
-      'system.batteryUnknown': 'Remaining time unknown',
       'system.uptimeValue': 'Up {duration}',
-      'system.capabilityScreenshot': 'Screenshot capability',
       'system.available': 'Available',
       'system.unavailable': 'Unavailable',
       'system.saveDirectory': 'Save folder',
       'system.capturedAt': 'Sampled {time}',
       'system.unknown': 'Unknown',
-      'system.empty': 'No data yet',
       'duration.day': '{n}d',
       'duration.hour': '{n}h',
       'duration.minute': '{n}m',
@@ -1196,6 +1177,25 @@ window.__ModuleLoader__.load({
       'monitor.alerts.error.invalid': 'Enter a valid number in range.',
       'monitor.alerts.error.generic': 'Alert action failed ({code}): {message}',
       'monitor.alerts.unavailable': 'Alert settings are unavailable',
+      'monitor.system.title': 'System info',
+      'monitor.system.hardware': 'System & hardware',
+      'monitor.system.runtime': 'Runtime',
+      'monitor.system.capabilities': 'Capabilities',
+      'monitor.system.chip': 'Chip',
+      'monitor.system.coresDetail': '{count} ({performance} performance + {efficiency} efficiency)',
+      'monitor.system.hostPid': 'Host PID',
+      'monitor.system.sampledAt': 'Sampled at',
+      'monitor.system.interval': 'Sample interval',
+      'monitor.system.polling': 'Polling',
+      'monitor.system.pollingActive': 'Polling',
+      'monitor.system.capability.screenshot': 'Screenshots',
+      'monitor.system.capability.hideApp': 'Hide app while capturing',
+      'monitor.system.capability.pin': 'Pinned windows',
+      'monitor.system.capability.history': 'Screenshot history',
+      'monitor.system.capability.transfer': 'Phone transfer',
+      'monitor.system.capability.monitor': 'Live status monitoring',
+      'monitor.system.capability.fanControl': 'Fan control',
+      'monitor.system.note': 'Memory, disk, battery, CPU and network values live in the overview cards above.',
     }
 
     /**
@@ -3151,7 +3151,6 @@ window.__ModuleLoader__.load({
         capture: { status: 'idle', mode: '', cancelling: false, error: null },
         shot: null,
         windows: { status: 'idle', list: [], frontmost: null, error: null },
-        system: { status: 'idle', value: null, refreshing: false, error: null },
         calc: { expression: '', status: 'idle', result: null, error: null, history: [] },
         transfer: {
           status: 'idle',
@@ -3187,7 +3186,6 @@ window.__ModuleLoader__.load({
       }
       let hostRequest = null
       let windowsRequest = null
-      let systemRequest = null
       let historyRequest = null
       let transferStatusRequest = null
       /** Whether a transfer status answer has landed since this store was made. */
@@ -3331,53 +3329,6 @@ window.__ModuleLoader__.load({
           throw error
         })
         windowsRequest = run
-        return run
-      }
-
-      /**
-       * Read system facts. Polled by the visible system tab every 10 s; a poll
-       * never stacks on an in-flight request and never flashes the loading
-       * skeleton over data already on screen.
-       *
-       * @param {{ signal?: AbortSignal }} [options] - transport options.
-       * @returns {Promise<boolean>} whether the facts are current.
-       */
-      function loadSystem(options) {
-        if (systemRequest !== null) return systemRequest
-        const firstLoad = snapshot.system.value === null
-        publish({
-          system: Object.assign({}, snapshot.system, {
-            status: firstLoad ? 'loading' : 'ready',
-            refreshing: true,
-            error: null,
-          }),
-        })
-        const run = host.post('system', {}, options).then((value) => {
-          const next = value !== null && typeof value === 'object' ? value : {}
-          publish({ system: { status: 'ready', value: next, refreshing: false, error: null } })
-          return true
-        }).catch((error) => {
-          const failure = describeFailure(error)
-          if (failure.code === 'aborted') {
-            publish({ system: Object.assign({}, snapshot.system, { status: snapshot.system.value === null ? 'idle' : 'ready', refreshing: false }) })
-            return false
-          }
-          publish({
-            system: Object.assign({}, snapshot.system, {
-              status: snapshot.system.value === null ? 'error' : 'ready',
-              refreshing: false,
-              error: failure,
-            }),
-          })
-          return false
-        }).then((result) => {
-          systemRequest = null
-          return result
-        }, (error) => {
-          systemRequest = null
-          throw error
-        })
-        systemRequest = run
         return run
       }
 
@@ -4991,7 +4942,6 @@ window.__ModuleLoader__.load({
         },
         loadHost,
         loadWindows,
-        loadSystem,
         capture,
         cancelCapture,
         selectTab,
@@ -6368,7 +6318,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
-    // System information tab
+    // Shared system-information card helpers (used by the status tab)
     // ---------------------------------------------------------------------
 
     /**
@@ -6422,229 +6372,6 @@ window.__ModuleLoader__.load({
         ]),
         h('div', { key: 'body', className: 'dshMacToolsCardBody' }, children),
       ])
-    }
-
-    /**
-     * The system tab. It reads facts on mount, again whenever the refresh button
-     * is pressed, and every 10 s only while the tab is visible — the effect is
-     * torn down on tab switch or panel unmount, so nothing polls in the
-     * background.
-     *
-     * @param {object} props - tab props.
-     * @returns {object} the element.
-     */
-    function SystemTab({ store, snapshot, t, active }) {
-      const [manualTick, setManualTick] = React.useState(0)
-
-      React.useEffect(() => {
-        if (!active) return () => {}
-        const controller = typeof AbortController === 'function' ? new AbortController() : null
-        const signal = controller === null ? undefined : controller.signal
-        void store.loadSystem({ signal })
-        const timer = setInterval(() => {
-          void store.loadSystem()
-        }, SYSTEM_POLL_MS)
-        return () => {
-          clearInterval(timer)
-          if (controller !== null) controller.abort()
-        }
-      }, [active, store])
-
-      // A manual refresh is a one-shot read; the tick only exists to force the
-      // component to look at the store after the click handler returns.
-      React.useEffect(() => {
-        if (manualTick === 0) return
-        void store.loadSystem()
-      }, [manualTick, store])
-
-      const system = snapshot.system
-      const value = system.value
-      const hostValue = snapshot.host.value
-      const refreshing = system.refreshing || system.status === 'loading'
-
-      const refreshButton = h('button', {
-        key: 'refresh',
-        type: 'button',
-        className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
-        disabled: refreshing,
-        onClick: () => setManualTick((tick) => tick + 1),
-      }, refreshing
-        ? [h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }), t('system.refreshing')]
-        : [glyph('refresh', 13, 'icon'), h('span', { key: 'label' }, t('system.refresh'))])
-
-      const header = h('div', { key: 'header', className: 'dshMacToolsSysHeader' }, [
-        value === null
-          ? h('span', { key: 'meta', className: 'dshMacToolsSysMeta' })
-          : h('p', { key: 'meta', className: 'dshMacToolsSysMeta' }, t('system.capturedAt', { time: formatDateTime(value.capturedAt) })),
-        refreshButton,
-      ])
-
-      const children = [header]
-
-      if (value === null) {
-        if (system.status === 'error' && system.error !== null) {
-          children.push(h('div', {
-            key: 'error',
-            className: 'dshMacToolsNotice dshMacToolsNoticeError',
-            role: 'alert',
-          }, [
-            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
-            h('p', { key: 'text' }, hostErrorText(t, system.error, 'system.error')),
-            h('button', {
-              key: 'retry',
-              type: 'button',
-              className: 'dshMacToolsButton dshMacToolsButtonCompact',
-              onClick: () => setManualTick((tick) => tick + 1),
-            }, t('common.retry')),
-          ]))
-        } else {
-          children.push(h('div', { key: 'loading', className: 'dshMacToolsLoading', 'aria-busy': 'true' }, [
-            h('span', { key: 'sr', className: 'dshMacToolsSrOnly' }, t('system.loading')),
-            h('div', { key: 'one', className: 'dshMacToolsSkeleton' }),
-            h('div', { key: 'two', className: 'dshMacToolsSkeleton' }),
-            h('div', { key: 'three', className: 'dshMacToolsSkeleton' }),
-          ]))
-        }
-        return h('div', null, children)
-      }
-
-      if (system.error !== null) {
-        children.push(h('div', {
-          key: 'stale',
-          className: 'dshMacToolsNotice',
-          role: 'alert',
-        }, [
-          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
-          h('p', { key: 'text' }, hostErrorText(t, system.error, 'system.error')),
-        ]))
-      }
-
-      const os = value.os !== null && typeof value.os === 'object' ? value.os : {}
-      const cpu = value.cpu !== null && typeof value.cpu === 'object' ? value.cpu : {}
-      const memory = value.memory !== null && typeof value.memory === 'object' ? value.memory : {}
-      const disk = value.disk !== null && typeof value.disk === 'object' ? value.disk : {}
-      const battery = value.battery !== null && typeof value.battery === 'object' ? value.battery : null
-
-      const memoryTotal = Number.isFinite(memory.totalBytes) ? memory.totalBytes : NaN
-      const memoryFree = Number.isFinite(memory.freeBytes) ? memory.freeBytes : NaN
-      const memoryUsed = Number.isFinite(memoryTotal) && Number.isFinite(memoryFree) ? Math.max(0, memoryTotal - memoryFree) : NaN
-      const memoryPercent = Number.isFinite(memory.usedPercent)
-        ? memory.usedPercent
-        : Number.isFinite(memoryTotal) && memoryTotal > 0 && Number.isFinite(memoryUsed)
-          ? (memoryUsed / memoryTotal) * 100
-          : 0
-
-      const diskTotal = Number.isFinite(disk.totalBytes) ? disk.totalBytes : NaN
-      const diskUsed = Number.isFinite(disk.usedBytes) ? disk.usedBytes : NaN
-      const diskPercent = Number.isFinite(diskTotal) && diskTotal > 0 && Number.isFinite(diskUsed) ? (diskUsed / diskTotal) * 100 : 0
-
-      const batteryPercent = battery !== null && Number.isFinite(battery.percent) ? battery.percent : NaN
-      const batteryMinutes = battery !== null && Number.isFinite(battery.timeRemainingMinutes) ? battery.timeRemainingMinutes : null
-      let batteryStatusText = t('system.batteryUnknown')
-      if (battery !== null) {
-        if (battery.charging === true) {
-          batteryStatusText = batteryPercent >= 100 ? t('system.batteryCharged') : t('system.batteryCharging')
-        } else if (batteryMinutes !== null) {
-          batteryStatusText = t('system.batteryRemaining', { duration: durationText(t, batteryMinutes * 60) })
-        } else if (batteryPercent >= 100) {
-          batteryStatusText = t('system.batteryCharged')
-        }
-      }
-
-      const capabilities = hostValue !== null && typeof hostValue === 'object' && hostValue.capabilities !== null && typeof hostValue.capabilities === 'object'
-        ? hostValue.capabilities
-        : {}
-      const saveDirectory = hostValue !== null && typeof hostValue === 'object' && typeof hostValue.saveDirectory === 'string' && hostValue.saveDirectory !== ''
-        ? hostValue.saveDirectory
-        : t('system.unknown')
-
-      const cards = [
-        h(SystemCard, { key: 'os', title: t('system.os'), icon: 'system' }, [
-          h(KeyValue, {
-            key: 'version',
-            label: t('system.version'),
-            value: `${os.name === undefined ? t('system.unknown') : os.name} ${os.version === undefined ? '' : os.version}`.trim(),
-          }),
-          h(KeyValue, { key: 'hostname', label: t('system.hostname'), value: os.hostname === undefined ? t('system.unknown') : os.hostname }),
-          h(KeyValue, { key: 'arch', label: t('system.arch'), value: os.arch === undefined ? t('system.unknown') : os.arch }),
-        ]),
-        h(SystemCard, { key: 'cpu', title: t('system.cpu'), icon: 'settings' }, [
-          h(KeyValue, { key: 'model', label: t('system.model'), value: cpu.model === undefined ? t('system.unknown') : cpu.model }),
-          h(KeyValue, {
-            key: 'cores',
-            label: t('system.coresLabel'),
-            value: cpu.cores === undefined ? t('system.unknown') : t('system.cores', { count: cpu.cores }),
-          }),
-        ]),
-        h(SystemCard, { key: 'memory', title: t('system.memory'), icon: 'system' }, [
-          h(KeyValue, {
-            key: 'used',
-            label: t('system.used'),
-            value: t('system.memoryUsed', { used: formatBytes(memoryUsed), total: formatBytes(memoryTotal) }),
-          }),
-          h(MeterBar, {
-            key: 'bar',
-            percent: memoryPercent,
-            label: t('system.usedPercent', { percent: formatPercent(memoryPercent) }),
-          }),
-          h('p', { key: 'meta', className: 'dshMacToolsBarMeta' }, [
-            h('span', { key: 'percent' }, t('system.usedPercent', { percent: formatPercent(memoryPercent) })),
-            h('span', { key: 'total' }, formatBytes(memoryTotal)),
-          ]),
-        ]),
-        h(SystemCard, { key: 'disk', title: t('system.disk'), icon: 'save' }, [
-          h(KeyValue, {
-            key: 'used',
-            label: t('system.used'),
-            value: t('system.diskUsed', { used: formatBytes(diskUsed), total: formatBytes(diskTotal) }),
-          }),
-          h(MeterBar, {
-            key: 'bar',
-            percent: diskPercent,
-            tone: 'disk',
-            label: t('system.usedPercent', { percent: formatPercent(diskPercent) }),
-          }),
-          h('p', { key: 'meta', className: 'dshMacToolsBarMeta' }, [
-            h('span', { key: 'free' }, t('system.diskFree', { free: formatBytes(disk.freeBytes) })),
-            h('span', { key: 'mount' }, t('system.mount', { mount: disk.mount === undefined ? t('system.unknown') : disk.mount })),
-          ]),
-        ]),
-      ]
-
-      if (battery !== null) {
-        cards.push(h(SystemCard, { key: 'battery', title: t('system.battery'), icon: 'settings' }, [
-          h(KeyValue, { key: 'percent', label: t('system.level'), value: `${formatPercent(batteryPercent)}%` }),
-          h(MeterBar, {
-            key: 'bar',
-            percent: Number.isFinite(batteryPercent) ? batteryPercent : 0,
-            tone: 'battery',
-            label: `${formatPercent(batteryPercent)}%`,
-          }),
-          h('p', { key: 'status', className: 'dshMacToolsBarMeta' }, [
-            h('span', { key: 'state' }, batteryStatusText),
-          ]),
-        ]))
-      }
-
-      cards.push(h(SystemCard, { key: 'uptime', title: t('system.uptime'), icon: 'refresh' }, [
-        h(KeyValue, {
-          key: 'value',
-          label: t('system.uptime'),
-          value: t('system.uptimeValue', { duration: durationText(t, value.uptimeSeconds) }),
-        }),
-      ]))
-
-      cards.push(h(SystemCard, { key: 'host', title: t('system.host'), icon: 'camera', wide: true }, [
-        h(KeyValue, {
-          key: 'capability',
-          label: t('system.capabilityScreenshot'),
-          value: capabilities.screenshot === true ? t('system.available') : t('system.unavailable'),
-        }),
-        h(KeyValue, { key: 'save', label: t('system.saveDirectory'), value: saveDirectory, mono: true }),
-      ]))
-
-      children.push(h('div', { key: 'grid', className: 'dshMacToolsSysGrid' }, cards))
-      return h('div', null, children)
     }
 
     // ---------------------------------------------------------------------
@@ -7306,7 +7033,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One overview card. Reuses the system tab's card surface so the panel
+     * One overview card. Reuses the shared system-card surface so the panel
      * keeps a single visual language.
      *
      * @param {object} props - title, optional meta node, wide flag, children.
@@ -7452,6 +7179,110 @@ window.__ModuleLoader__.load({
           actions,
         ]),
         h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [statusLine, summary, allSensors]),
+      ])
+    }
+
+
+    /**
+     * 系统信息 — the surviving standalone System-tab content, merged into the
+     * status tab between 温度传感器 and 风扇控制. Memory, disk, battery, CPU and
+     * network values stay in the overview cards above (battery is not repeated
+     * here), while hardware identity, runtime facts and Host capabilities live
+     * in this section's three reused system cards.
+     *
+     * @param {object} props - snapshot and translator.
+     * @returns {object|null} the section, or null before the first snapshot.
+     */
+    function MonitorSystemSection({ snapshot, t }) {
+      const monitor = snapshot.monitor
+      const value = monitor.value
+      if (value === null || typeof value !== 'object') return null
+      const sample = value.sample !== null && typeof value.sample === 'object' ? value.sample : {}
+      const host = sample.host !== null && typeof sample.host === 'object' ? sample.host : {}
+      const systemInfo = snapshot.host !== null && typeof snapshot.host === 'object'
+        ? snapshot.host
+        : { kind: 'loading', value: null }
+      const hostValue = systemInfo.value !== null && typeof systemInfo.value === 'object' ? systemInfo.value : null
+      const capabilities = hostValue !== null && hostValue.capabilities !== null && typeof hostValue.capabilities === 'object'
+        ? hostValue.capabilities
+        : null
+      const unknown = t('system.unknown')
+      const textOf = (field) => (typeof field === 'string' && field !== '' ? field : unknown)
+      const finiteOf = (field) => (Number.isFinite(field) ? field : null)
+
+      const osVersion = typeof host.osVersion === 'string' ? host.osVersion : ''
+      const osText = osVersion === '' ? textOf(host.osName) : `${textOf(host.osName)} ${osVersion}`
+      const cpuCores = finiteOf(host.cpuCores)
+      const performanceCores = finiteOf(host.performanceCores)
+      const efficiencyCores = finiteOf(host.efficiencyCores)
+      const coresText = cpuCores === null
+        ? unknown
+        : (performanceCores !== null && efficiencyCores !== null
+          ? t('monitor.system.coresDetail', { count: cpuCores, performance: performanceCores, efficiency: efficiencyCores })
+          : t('system.cores', { count: cpuCores }))
+      const uptimeText = t('system.uptimeValue', {
+        duration: durationText(t, Number.isFinite(host.uptimeSeconds) ? host.uptimeSeconds : 0),
+      })
+
+      const version = typeof value.version === 'string' && value.version !== '' ? value.version : unknown
+      const hostPid = hostValue !== null && Number.isFinite(hostValue.hostPid) ? String(hostValue.hostPid) : unknown
+      const hasSampledAt = typeof value.sampledAt === 'string' && value.sampledAt !== ''
+      const sampledAt = hasSampledAt ? formatDateTime(value.sampledAt) : unknown
+      const saveDirectory = hostValue !== null && typeof hostValue.saveDirectory === 'string' && hostValue.saveDirectory !== ''
+        ? hostValue.saveDirectory
+        : unknown
+      const intervalMs = MONITOR_INTERVALS.indexOf(monitor.intervalMs) >= 0 ? monitor.intervalMs : MONITOR_POLL_MS
+      const intervalText = t('monitor.interval.option', { n: intervalMs / 1000 })
+      const pollingText = monitor.paused === true ? t('monitor.paused') : t('monitor.system.pollingActive')
+
+      const hardwareCard = h(SystemCard, { key: 'hardware', title: t('monitor.system.hardware'), icon: 'system' }, [
+        h(KeyValue, { key: 'os', label: t('system.os'), value: osText }),
+        h(KeyValue, { key: 'arch', label: t('system.arch'), value: textOf(host.arch) }),
+        h(KeyValue, { key: 'hostname', label: t('system.hostname'), value: textOf(host.hostname) }),
+        h(KeyValue, { key: 'model', label: t('system.model'), value: textOf(host.modelIdentifier) }),
+        h(KeyValue, { key: 'chip', label: t('monitor.system.chip'), value: textOf(host.cpuModel) }),
+        h(KeyValue, { key: 'cores', label: t('system.coresLabel'), value: coresText }),
+        h(KeyValue, { key: 'uptime', label: t('system.uptime'), value: uptimeText }),
+      ])
+
+      const runtimeCard = h(SystemCard, { key: 'runtime', title: t('monitor.system.runtime'), icon: 'settings' }, [
+        h(KeyValue, { key: 'version', label: t('system.version'), value: version }),
+        h(KeyValue, { key: 'hostPid', label: t('monitor.system.hostPid'), value: hostPid }),
+        h(KeyValue, { key: 'sampledAt', label: t('monitor.system.sampledAt'), value: sampledAt }),
+        h(KeyValue, { key: 'saveDirectory', label: t('system.saveDirectory'), value: saveDirectory, mono: true }),
+        h(KeyValue, { key: 'interval', label: t('monitor.system.interval'), value: intervalText }),
+        h(KeyValue, { key: 'polling', label: t('monitor.system.polling'), value: pollingText }),
+      ])
+
+      const capabilityRows = MONITOR_SYSTEM_CAPABILITIES.map((entry) => h(KeyValue, {
+        key: `capability-${entry[0]}`,
+        label: t(entry[1]),
+        value: hostValue === null
+          ? (systemInfo.kind === 'loading' ? t('host.loading') : unknown)
+          : (capabilities === null
+            ? unknown
+            : (capabilities[entry[0]] === true ? t('system.available') : t('system.unavailable'))),
+      }))
+      const capabilitiesCard = h(SystemCard, {
+        key: 'capabilities',
+        title: t('monitor.system.capabilities'),
+        icon: 'check',
+      }, capabilityRows)
+
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.system.title'),
+      }, [
+        h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.system.title')),
+          hasSampledAt
+            ? h('span', { key: 'meta', className: 'dshMacToolsMonitorSectionMeta' }, t('system.capturedAt', { time: sampledAt }))
+            : null,
+        ]),
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [
+          h('div', { key: 'grid', className: 'dshMacToolsSysGrid' }, [hardwareCard, runtimeCard, capabilitiesCard]),
+          h('p', { key: 'note', className: 'dshMacToolsMonitorMuted' }, t('monitor.system.note')),
+        ]),
       ])
     }
 
@@ -9111,6 +8942,7 @@ window.__ModuleLoader__.load({
         staleError,
         overview,
         h(MonitorSensorsSection, { key: 'sensors', t, sensors: sample.sensors }),
+        h(MonitorSystemSection, { key: 'system', snapshot, t }),
         h(MonitorFanSection, { key: 'fan', store, snapshot, t }),
         h(MonitorProcessSection, { key: 'processes', store, snapshot, t }),
         h(MonitorAlertsSection, { key: 'alerts', store, snapshot, t }),
@@ -9180,12 +9012,13 @@ window.__ModuleLoader__.load({
     /**
      * The panel page, rendered by the `main` slot while this panel is active.
      *
-     * All five tabs stay mounted and inactive ones are hidden with the
+     * All four tabs stay mounted and inactive ones are hidden with the
      * `hidden` attribute, so an in-progress annotation set, the calculator's
-     * expression and history, the system snapshot, the live status snapshot
-     * and the transfer session all survive a tab switch. Only the visible tab
-     * polls: system facts every 10 s, the live status every 1 / 2 / 5 s and the
-     * phone-transfer session/lists every 2 s / 4 s.
+     * expression and history, the live status snapshot and the transfer session
+     * all survive a tab switch. Only the visible tab polls: the live status
+     * every 1 / 2 / 5 s and the phone-transfer session/lists every 2 s / 4 s.
+     * The old System tab's still-unique facts are rendered inside the status
+     * tab's 系统信息 section instead of being polled separately.
      *
      * @param {object} props - slot props: the injected store plus the translator.
      * @returns {object} the page element.
@@ -9257,7 +9090,6 @@ window.__ModuleLoader__.load({
         let content
         if (id === 'screenshot') content = h(ScreenshotTab, { store, snapshot, t, active })
         else if (id === 'calculator') content = h(CalculatorTab, { store, snapshot, t })
-        else if (id === 'system') content = h(SystemTab, { store, snapshot, t, active })
         else if (id === 'monitor') content = h(MonitorTab, { store, snapshot, t, active })
         else content = h(TransferTab, { store, snapshot, t, active })
         return h('section', {
@@ -9406,7 +9238,7 @@ window.__ModuleLoader__.load({
             scope.effect(() => scope.shortcuts.register({
               id: SHORTCUT_TOGGLE,
               label: () => t('shortcut.toggle'),
-              aliases: ['mac tools', 'toolbox', 'screenshots', 'calculator', 'system information'],
+              aliases: ['mac tools', 'toolbox', 'screenshots', 'calculator', 'system information', 'status monitor'],
               defaults: shortcutDefaults('KeyM', ['primary', 'alt']),
               regions: ['page'],
               modals: [],

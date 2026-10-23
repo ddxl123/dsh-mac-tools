@@ -372,9 +372,10 @@ tab working. Read `docs/CLIENT-CONTRACT.md` first — the same hard constraints
 apply (no imports besides `react`, no JSX, one injected stylesheet, `dshMacTools…`
 class prefix, theme tokens only for chrome, zh/en dictionaries complete).
 
-- Add `'monitor'` to `TABS` **after** `'system'`. zh label `运行状态`, en label
-  `Status`. Snapshot state lives in the existing module-level store
-  (`state.tab`, etc.) with a new `monitor` slice.
+- Add `'monitor'` to `TABS` between `'calculator'` and `'transfer'`; the old
+  `'system'` tab is gone (its unique facts merged into this tab, see below).
+  zh label `运行状态`, en label `Status`. Snapshot state lives in the existing
+  module-level store (`state.tab`, etc.) with a new `monitor` slice.
 - Poll `monitor` with `host.post('monitor', {})` only while the tab is visible;
   dedupe in-flight requests, abort on unmount/tab switch, pause with the panel's
   visibility handling. Default interval 1 s, selectable 1 / 2 / 5 s; a Pause
@@ -383,7 +384,8 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
 - Layout (top → bottom), State-inspired but in the panel's flat card style:
   1. **Toolbar**: sample time, interval selector, pause/resume, manual refresh,
      small availability badges.
-  2. **Overview cards** (responsive two-column grid):
+  2. **Overview cards** (responsive two-column grid; memory/disk/battery/
+     network/uptime live here):
      - CPU: chip name, big temperature, usage area sparkline (history.cpu),
        legend 用户/系统/闲置 percentages, per-core mini bars.
      - Memory: available/total, usage bar with app/wired/compressed/cached
@@ -398,7 +400,17 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
      CPU 能效核 / GPU / SSD / 内存 / Wi-Fi), then a collapsible "全部传感器"
      list (key + °C, grouped by key prefix family, sorted by temperature desc).
      Show the SMC reason when `sensors.available` is false.
-  4. **风扇控制** section:
+  4. **系统信息** section (merged from the former separate System tab, which is
+     removed): system/hardware facts (`sample.host`: OS version + arch,
+     hostname, model identifier, chip, total/P/E cores, uptime), runtime facts
+     (`version`, `snapshot.host.value.hostPid`, `sampledAt`, save folder from
+     `snapshot.host.value.saveDirectory`, current polling interval/pause), and
+     the Host capability list (`snapshot.host.value.capabilities`: screenshot,
+     hideApp, pin, history, transfer, monitor, fanControl → 可用/不可用).
+     Memory/disk/battery/network stay in the overview cards, not duplicated
+     here. Renders only once `monitor.value` exists; degrades to 未知 when the
+     `status` answer has not arrived yet.
+  5. **风扇控制** section:
      - `state === "not-installed"`: explanation + **启用风扇控制** button; the
        copy must disclose what will be installed (a root helper in
        `/Library/Application Support/DSH Mac Tools/` plus a LaunchDaemon, used
@@ -423,11 +435,11 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
        Commits via `fanApply` with `mode: "curve"`.
      - An uninstall button (danger styling, confirm inline) that restores auto
        control and removes the root helper.
-  5. **进程排行** section: CPU / 内存 sort segment, top ~12 rows with CPU%,
+  6. **进程排行** section: CPU / 内存 sort segment, top ~12 rows with CPU%,
      memory%, RSS, and a kill action guarded by a two-step inline confirm
      (first click arms "确认结束?", second click within 3 s kills; errors map to
      localized messages). Mark the Host's own processes as not killable.
-  6. **告警** section: enabled switch, three numeric fields (CPU %, 温度 °C,
+  7. **告警** section: enabled switch, three numeric fields (CPU %, 温度 °C,
      内存 %), cooldown field (秒), notify switch, 保存 + 测试通知 buttons, and
      the recent events list (localized time, metric name, value/threshold).
 - All request failures go through the existing `describeFailure`-style

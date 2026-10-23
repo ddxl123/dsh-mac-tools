@@ -672,6 +672,40 @@ function collectElements(element, predicate, found = []) {
 
 
 /**
+ * Invoke every function component in an element tree and collect the string
+ * children it renders, so a test can assert which localized keys a state shows.
+ *
+ * @param {any} element - an element returned by `React.createElement`.
+ * @param {number} [depth] - recursion guard.
+ * @param {string[]} [found] - the accumulator.
+ * @returns {string[]} the rendered strings and locale keys.
+ */
+function renderedStrings(element, depth = 0, found = []) {
+  if (depth > 60) throw new Error('element tree is deeper than the panel should be')
+  if (element === null || element === undefined) return found
+  if (typeof element === 'string' || typeof element === 'number') {
+    found.push(String(element))
+    return found
+  }
+  if (Array.isArray(element)) {
+    for (const child of element) renderedStrings(child, depth, found)
+    return found
+  }
+  if (typeof element.type === 'function') {
+    const props = {
+      ...element.props,
+      children: element.children.length === 0
+        ? undefined
+        : (element.children.length === 1 ? element.children[0] : element.children),
+    }
+    renderedStrings(element.type(props), depth + 1, found)
+    return found
+  }
+  for (const child of element.children) renderedStrings(child, depth, found)
+  return found
+}
+
+/**
  * Walk a rendered element tree, invoking every function component with the
  * stubbed React, so a crash in a tab's render path surfaces as a test failure
  * (a throwing component blanks its slot in the real panel).
@@ -736,7 +770,7 @@ test('apply registers complete zh and en dictionaries', () => {
     'subtitle',
     'tab.screenshot',
     'tab.calculator',
-    'tab.system',
+    'tab.monitor',
     'tab.transfer',
     'transfer.start',
     'transfer.inbox.title',
@@ -776,10 +810,32 @@ test('apply registers complete zh and en dictionaries', () => {
     'calc.key.equals',
     'calc.history',
     'calc.error.divide_by_zero',
-    'system.memory',
-    'system.disk',
+    'system.os',
+    'system.arch',
+    'system.hostname',
+    'system.model',
+    'system.cores',
+    'system.coresLabel',
     'system.uptime',
-    'system.capabilityScreenshot',
+    'system.uptimeValue',
+    'system.available',
+    'system.unavailable',
+    'system.saveDirectory',
+    'system.capturedAt',
+    'system.unknown',
+    'monitor.system.title',
+    'monitor.system.hardware',
+    'monitor.system.runtime',
+    'monitor.system.capabilities',
+    'monitor.system.chip',
+    'monitor.system.coresDetail',
+    'monitor.system.hostPid',
+    'monitor.system.sampledAt',
+    'monitor.system.interval',
+    'monitor.system.polling',
+    'monitor.system.capability.screenshot',
+    'monitor.system.capability.fanControl',
+    'monitor.system.note',
     'shortcut.toggle',
     'shortcut.screenshot',
   ]
@@ -992,16 +1048,13 @@ test('calculator evaluations go through the Host and fill the session history', 
   assert.equal(snapshot.calc.history.length, 2, 'a failed evaluation is not added to the history')
 })
 
-test('store reads the window list, system facts and reports a missing Host half', async () => {
+test('store reads the window list and reports a missing Host half', async () => {
   const recorder = hostRecorder((body) => {
     if (body.endpoint === 'windows') {
       return jsonResponse({
         windows: [{ id: 'w1', app: 'Safari', title: 'Docs', w: 800, h: 600, frontmost: true }],
         frontmost: { app: 'Safari', title: 'Docs', id: 'w1' },
       })
-    }
-    if (body.endpoint === 'system') {
-      return jsonResponse({ os: { name: 'macOS', version: '15.1', arch: 'arm64', hostname: 'mac.local' }, uptimeSeconds: 42 })
     }
     return jsonResponse({})
   })
@@ -1015,11 +1068,10 @@ test('store reads the window list, system facts and reports a missing Host half'
   assert.equal(snapshot.windows.list[0].app, 'Safari')
   assert.equal(snapshot.windows.frontmost.id, 'w1')
 
-  assert.equal(await store.loadSystem(), true)
-  snapshot = store.getSnapshot()
-  assert.equal(snapshot.system.status, 'ready')
-  assert.equal(snapshot.system.refreshing, false)
-  assert.equal(snapshot.system.value.os.name, 'macOS')
+  // The old standalone System IPC and its store slice no longer exist: the
+  // status tab renders that data from its own snapshot instead.
+  assert.equal(typeof store.loadSystem, 'undefined')
+  assert.equal('system' in snapshot, false)
 
   const missing = hostRecorder(() => ({ ok: false, status: 404, async json() { return { ok: false, error: { code: 'not_found', message: 'no route' } } } }))
   const missingStore = injectedStore(applyClient({ fetch: missing.fetch }).state)
@@ -1720,7 +1772,7 @@ test('the panel renders every transfer state without throwing', () => {
   })
 })
 
-test('the status tab is registered after system and localizes its label', () => {
+test('the four tabs are registered in the documented order without a System tab', () => {
   const { state } = applyClient()
   const store = injectedStore(state)
   const main = state.slots.find((slot) => slot.options.name === 'main')
@@ -1731,17 +1783,18 @@ test('the status tab is registered after system and localizes its label', () => 
     [
       'dsh-mac-tools-tab-screenshot',
       'dsh-mac-tools-tab-calculator',
-      'dsh-mac-tools-tab-system',
       'dsh-mac-tools-tab-monitor',
       'dsh-mac-tools-tab-transfer',
     ],
-    'the monitor tab must come right after the system tab',
+    'the System tab must be gone and the status tab must follow the calculator',
   )
   assert.deepEqual(
     tabs.map((element) => element.children[0]),
-    ['tab.screenshot', 'tab.calculator', 'tab.system', 'tab.monitor', 'tab.transfer'],
+    ['tab.screenshot', 'tab.calculator', 'tab.monitor', 'tab.transfer'],
     'every tab label must go through the locale service',
   )
+  assert.equal(tabs.some((element) => element.props.id.endsWith('-system')), false)
+  assert.match(CLIENT_SOURCE, /const TABS = \['screenshot', 'calculator', 'monitor', 'transfer'\]/u)
 })
 
 test('the monitor dictionaries are complete in both languages', () => {
@@ -2362,4 +2415,216 @@ test('the monitor source and stylesheet keep the bundle constraints', () => {
   assert.equal(CLIENT_SOURCE.includes('setInterval'), true)
   assert.equal(CLIENT_SOURCE.includes('document.body'), false)
   assert.equal((CLIENT_SOURCE.match(/require\('/gu) || []).length, 1)
+})
+
+test('the System tab machinery and its old locale keys are gone', () => {
+  const { state } = applyClient()
+  const { zh, en } = state.locales[0].dictionaries
+
+  // Source: no standalone system loader/tab/polling or store slice.
+  for (const token of [
+    'loadSystem',
+    'SYSTEM_POLL_MS',
+    'function SystemTab',
+    'snapshot.system',
+    "tab.system",
+  ]) {
+    assert.equal(CLIENT_SOURCE.includes(token), false, `the client still mentions ${token}`)
+  }
+  assert.equal(CLIENT_SOURCE.includes("host.post('system'"), false, 'the standalone system endpoint must not be polled')
+  assert.ok(CLIENT_SOURCE.includes('function MonitorSystemSection'), 'the merged section must exist')
+  assert.ok(CLIENT_SOURCE.includes('h(MonitorSystemSection'), 'the merged section must be mounted')
+  assert.ok(CLIENT_SOURCE.includes('dshMacToolsSysGrid'), 'the old card style must be reused')
+  assert.ok(CLIENT_SOURCE.includes('function SystemCard'), 'the card helper must be kept for the merged section')
+
+  // Dictionaries: removed keys are absent in both languages.
+  const removed = [
+    'tab.system',
+    'system.refresh',
+    'system.refreshing',
+    'system.loading',
+    'system.error',
+    'system.cpu',
+    'system.memory',
+    'system.disk',
+    'system.battery',
+    'system.host',
+    'system.used',
+    'system.level',
+    'system.memoryUsed',
+    'system.diskUsed',
+    'system.diskFree',
+    'system.mount',
+    'system.usedPercent',
+    'system.batteryCharging',
+    'system.batteryRemaining',
+    'system.batteryCharged',
+    'system.batteryUnknown',
+    'system.capabilityScreenshot',
+    'system.empty',
+  ]
+  for (const key of removed) {
+    assert.equal(key in zh, false, `zh.${key} should be removed`)
+    assert.equal(key in en, false, `en.${key} should be removed`)
+  }
+
+  // The surviving keys still used by the merged section exist in both.
+  const kept = [
+    'system.os',
+    'system.arch',
+    'system.hostname',
+    'system.model',
+    'system.version',
+    'system.cores',
+    'system.coresLabel',
+    'system.uptime',
+    'system.uptimeValue',
+    'system.available',
+    'system.unavailable',
+    'system.saveDirectory',
+    'system.capturedAt',
+    'system.unknown',
+  ]
+  for (const key of kept) assert.ok(key in zh && key in en, `missing kept dictionary key: ${key}`)
+
+  // Every new merged-section key is present in both languages with parity.
+  const zhMerged = Object.keys(zh).filter((key) => key.startsWith('monitor.system.')).sort()
+  const enMerged = Object.keys(en).filter((key) => key.startsWith('monitor.system.')).sort()
+  assert.deepEqual(zhMerged, enMerged, 'the merged section keys must be complete in both languages')
+  assert.ok(zhMerged.length >= 18, `expected a complete merged-section dictionary, got ${zhMerged.length}`)
+  for (const key of zhMerged) {
+    assert.equal(typeof zh[key], 'string')
+    assert.notEqual(zh[key].trim(), '')
+    assert.notEqual(en[key].trim(), '')
+  }
+  assert.match(zh['monitor.system.title'], /[\u4e00-\u9fff]/u)
+  assert.notEqual(zh['monitor.system.title'], en['monitor.system.title'])
+})
+
+test('the merged system-information section renders hardware, runtime and capabilities', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const hostValue = {
+    version: '0.3.0',
+    platform: 'darwin',
+    saveDirectory: '/Users/tester/Pictures/DSH Mac Tools',
+    hostPid: 4242,
+    capabilities: {
+      screenshot: true,
+      calculator: true,
+      clipboard: true,
+      system: true,
+      hideApp: false,
+      pin: true,
+      history: true,
+      transfer: true,
+      monitor: true,
+      fanControl: true,
+    },
+  }
+  const renderTexts = (snapshot) => {
+    store.getSnapshot = () => snapshot
+    return renderedStrings(main.component({ store, t }))
+  }
+
+  const ready = renderTexts({
+    ...base,
+    host: { kind: 'ready', value: hostValue, http: 200, message: '' },
+    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+  })
+  for (const key of [
+    'monitor.system.title',
+    'monitor.system.hardware',
+    'monitor.system.runtime',
+    'monitor.system.capabilities',
+    'monitor.system.chip',
+    'monitor.system.coresDetail',
+    'monitor.system.hostPid',
+    'monitor.system.sampledAt',
+    'monitor.system.interval',
+    'monitor.system.polling',
+    'monitor.system.pollingActive',
+    'monitor.system.capability.screenshot',
+    'monitor.system.capability.hideApp',
+    'monitor.system.capability.pin',
+    'monitor.system.capability.history',
+    'monitor.system.capability.transfer',
+    'monitor.system.capability.monitor',
+    'monitor.system.capability.fanControl',
+    'monitor.system.note',
+    'system.os',
+    'system.arch',
+    'system.hostname',
+    'system.model',
+    'system.coresLabel',
+    'system.uptime',
+    'system.uptimeValue',
+    'system.version',
+    'system.saveDirectory',
+    'system.capturedAt',
+  ]) {
+    assert.ok(ready.includes(key), `the merged section must render ${key}`)
+  }
+  assert.ok(ready.includes('system.available'), 'capabilities must render as available')
+  assert.ok(ready.includes('system.unavailable'), 'the disabled hideApp capability must render as unavailable')
+  assert.equal(ready.filter((entry) => entry === 'system.available').length >= 6, true)
+  // The values themselves (not only their labels) reach the render tree.
+  assert.ok(ready.includes('Apple M4'))
+  assert.ok(ready.includes('Mac16,10'))
+  assert.ok(ready.includes('4242'))
+  assert.ok(ready.includes(hostValue.saveDirectory))
+  assert.ok(ready.includes('0.3.0'))
+  // Memory / disk / battery stay in the overview cards only: the old system
+  // card labels are gone, and the note points at the cards above.
+  for (const gone of ['system.memory', 'system.disk', 'system.battery', 'system.cpu', 'system.capabilityScreenshot']) {
+    assert.equal(ready.includes(gone), false, `the merged section must not render ${gone}`)
+  }
+  for (const overviewKey of ['monitor.cpu.title', 'monitor.memory.title', 'monitor.disk.title', 'monitor.network.title']) {
+    assert.ok(ready.includes(overviewKey), `the overview card ${overviewKey} must stay`)
+  }
+})
+
+test('the system-information section degrades when Host status is unavailable', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+
+  const renderTexts = (snapshot) => {
+    store.getSnapshot = () => snapshot
+    return renderedStrings(main.component({ store, t }))
+  }
+
+  // Host still loading: capability rows say "connecting", nothing throws.
+  const loading = renderTexts({
+    ...base,
+    host: { kind: 'loading', value: null, http: 0, message: '' },
+    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+  })
+  assert.ok(loading.includes('monitor.system.title'))
+  assert.ok(loading.includes('host.loading'), 'capability rows must degrade to the loading copy')
+  assert.ok(loading.includes('system.unknown'), 'runtime facts must degrade to the unknown copy')
+
+  // Host missing entirely: credentials/permission rows fall back to 未知.
+  const missing = renderTexts({
+    ...base,
+    host: { kind: 'missing', value: null, http: 404, message: 'no route' },
+    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+  })
+  assert.ok(missing.includes('monitor.system.title'))
+  assert.ok(missing.includes('system.unknown'))
+  assert.equal(missing.includes('system.available'), false, 'no capability can be claimed without Host facts')
+
+  // No snapshot yet: the status tab shows its skeleton, not the merged section.
+  const skeleton = renderTexts({
+    ...base,
+    host: { kind: 'ready', value: { version: '0.3.0', capabilities: {} }, http: 200, message: '' },
+    monitor: { ...base.monitor, status: 'loading', value: null, error: null },
+  })
+  assert.equal(skeleton.includes('monitor.system.title'), false, 'the merged section waits for the first status snapshot')
+  assert.ok(skeleton.includes('monitor.loading'))
 })

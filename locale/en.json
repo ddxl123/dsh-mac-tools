@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Mac Tools",
-    "description": "A local macOS toolbox panel: QQ-style screenshot capture (native region/window picker, crop, arrows, shapes, text, mosaic, highlighter), calculator, phone transfer (QR LAN page for text/files/images), clipboard, system info, and a Status dashboard in the spirit of State (CPU, memory, disk, network, battery, SMC temperatures and fans, process ranking, threshold alerts) with fan-speed control. Panel-only; it registers no agent tools."
+    "description": "A local macOS toolbox panel: QQ-style screenshot capture (native region/window picker, crop, arrows, shapes, text, mosaic, highlighter), calculator, phone transfer (QR LAN page for text/files/images), clipboard, and a Status dashboard in the spirit of State (CPU, memory, disk, network, battery, system information, SMC temperatures and fans, process ranking, threshold alerts) with fan-speed control. Panel-only; it registers no agent tools."
   }
 }

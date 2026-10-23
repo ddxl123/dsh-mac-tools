@@ -15,13 +15,12 @@ A local macOS toolbox in **one** DeepSeek Harness plugin:
   through the phone's browser. No app install, nothing leaves the local network.
 - **Clipboard** — read and write the macOS text clipboard from the panel or the
   agent.
-- **System information** — macOS version, CPU, memory, disk, battery and
-  uptime, in a panel card grid.
 - **Status (运行状态)** — a real-time dashboard in the spirit of the App Store
-  app **State**: CPU/memory/disk/network/battery charts, SMC temperatures and
-  fans, a process ranking and threshold alerts — plus fan-speed control in the
-  spirit of **Macs Fan Control** (auto / manual RPM / temperature curve /
-  presets) through a one-time-authorized root helper.
+  app **State**: CPU/memory/disk/network/battery charts, system information,
+  SMC temperatures and fans, a process ranking and threshold alerts — plus
+  fan-speed control in the spirit of **Macs Fan Control** (auto / manual RPM /
+  temperature curve / presets) through a one-time-authorized root helper.
+  (The former separate System tab is merged into this tab.)
 
 Everything runs on the local machine. The plugin is **panel-only**: it adds the
 **Mac Tools** entry in the left rail and registers **no model-facing tools**.
@@ -120,56 +119,6 @@ Supports `+ - * / % ^`, parentheses, unary signs, implicit multiplication
 cos, tan, asin, acos, atan, atan2, pow, hypot, min, max, mod`. Trigonometry is
 in degrees by default.
 
-### System tab
-
-macOS version, architecture, hostname, CPU model and cores, memory with a usage
-bar, root disk capacity, battery (when present) and uptime. Refreshes every ten
-seconds while visible; the same facts are available through the tool.
-
-### Status tab (运行状态)
-
-A real-time dashboard (in the spirit of the App Store app **State**) plus fan
-speed control (in the spirit of **Macs Fan Control**). Everything is sampled
-locally by the Host; nothing leaves the machine.
-
-- **Overview cards** — CPU usage with the user/system/idle legend, per-core
-  bars and a two-minute area chart, plus the chip's current temperature;
-  memory (available/total, app/wired/compressed/cached breakdown and the macOS
-  pressure level); the APFS data volume; network throughput with a two-line
-  chart; battery (when present); uptime. The interval selector offers 1 / 2 /
-  5 s polling and a pause toggle.
-- **Temperature sensors** — CPU performance/efficiency cluster, GPU, SSD,
-  memory and Wi-Fi maxima read from the SMC, plus a collapsible list of every
-  readable sensor key. Fan speeds, targets and the SMC's own minimum/maximum
-  sit next to them. No extra permission is needed for reading.
-- **Fan control** — automatic, a manual RPM slider clamped to the fan's own SMC
-  limits, or a temperature curve (choose the sensor, drag 2–8 points, linear
-  interpolation). Built-in presets (**auto / quiet / balanced / performance /
-  max**) plus saved custom presets, and **恢复系统自动** hands the fan back at
-  any time. The first use asks for the administrator password **once**: the
-  panel installs a small root helper
-  (`/Library/Application Support/DSH Mac Tools/fan/fan-daemon`) and a
-  LaunchDaemon (`local.dsh.mac-tools.fan`). The helper accepts only fan
-  commands from the installing user, clamps every target to the SMC limits,
-  re-applies the target while a mode is held, and restores automatic control
-  when the mode changes, the Host exits, the socket disconnects or 12 s pass
-  without a command. **卸载风扇控制** in the same card restores automatic
-  control and deletes the helper and the LaunchDaemon. Fan control is only
-  offered on Macs that have a fan (a MacBook Air shows the monitor without it).
-  Two things always keep the last word: macOS thermal management may raise the
-  fan above the requested target under sustained load (verified on this Mac at
-  >100 °C), and another running fan controller (e.g. Macs Fan Control) will
-  overwrite the target between writes — the card warns when one is detected,
-  and quitting it hands control back to this panel.
-- **Process ranking** — the top processes by CPU or memory with a two-step
-  inline kill confirmation. The Host refuses `pid` 1, its own process and
-  processes it does not own.
-- **Threshold alerts** — CPU %, temperature °C and memory % thresholds with a
-  cooldown and an optional macOS notification; the settings persist under the
-  plugin state directory (`~/.dsh/dsh-mac-tools/monitor/alerts.json`) and the
-  recent events stay in the card. **测试通知** fires one notification so the
-  macOS permission can be checked.
-
 ### Phone tab
 
 A LAN-only bridge between the Mac and a phone browser. Press **开启手机互传**;
@@ -263,7 +212,7 @@ layer); every key has a default.
   directory. No agent tools are registered.
 - **Client half** (`client/index.js`): one plain-React bundle loaded by
   `window.__ModuleLoader__`. It registers the rail entry and the `main` panel,
-  renders the five tabs, and talks to the Host only through the route above.
+  renders the four tabs, and talks to the Host only through the route above.
 - The capture engine is a thin wrapper over the system utility a person already
   granted Screen Recording to; region/window selection, cancellation and window
   picking are native macOS behavior, not reimplemented.
