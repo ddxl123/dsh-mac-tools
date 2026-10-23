@@ -7,9 +7,9 @@
 # `plugin_manager` `install_bundle` call against this directory.
 #
 # The row is host-plane, not preset-plane: one instance owns the temporary
-# screenshot registry, the `/api/dsh-mac-tools` route and the model-facing
-# tools, so every browser window and every session sees the same capability.
-# Nothing here is per-session state.
+# screenshot registry, the `/api/dsh-mac-tools` route and the optional
+# phone-transfer listener, so every browser window and every session sees the
+# same capability. Nothing here is per-session state.
 #
 # Every value below is overridable from a later layer (the active profile's
 # `cordis.patch.yml` or a `--patch` overlay); a patch replaces a row's whole
@@ -57,3 +57,19 @@
         # captured region pinned; Esc closes it. The panel editor also offers an
         # explicit "pin" button. Set false to only copy and save.
         pinAfterGlobalCapture: true
+        # Phone transfer: the panel's "Phone" tab starts a temporary HTTP
+        # listener on the local network on demand, shows a QR code, and lets a
+        # phone browser send/receive text, files and images without installing
+        # an app. The listener stops when the session expires, when the panel
+        # stops it, or when the plugin unloads.
+        # Preferred TCP port; the next 9 ports are tried when it is taken.
+        transferPort: 8791
+        # Where files sent by the phone are saved (`~` is expanded). Empty
+        # means `~/Downloads/DSH 手机互传`.
+        transferDirectory: ''
+        # How long one transfer session stays open before the QR code expires.
+        transferSessionMinutes: 30
+        # Largest single file a phone may upload, in megabytes.
+        transferMaxFileMB: 512
+        # Copy text received from the phone to the macOS clipboard automatically.
+        transferAutoCopyText: false

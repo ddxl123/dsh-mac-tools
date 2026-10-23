@@ -23,10 +23,12 @@ import {
   readPngSize,
   readTextClipboard,
   revealInFinder,
+  runProcess,
   showNotification,
 } from './capture.js'
 import { CalcError, evaluate } from './calc.js'
 import { HotkeyValidationError } from './hotkey.js'
+import { TransferError } from './transfer.js'
 import { listWindows, selectWindow } from './windows.js'
 import { API_PATH } from './route.js'
 import { MAX_SHOT_BYTES } from './store.js'
@@ -149,9 +151,11 @@ export function decodePngBase64(input) {
  * @param {{ status: () => object, setAccelerator: (accelerator: string) => Promise<object>, reset: () => Promise<object> }} [deps.hotkey] - global-hotkey controller (injectable for tests).
  * @param {{ pin: (buffer: Buffer, options?: object) => Promise<object>, count: number, dispose: () => void }} [deps.pins] - pinned-image manager (injectable for tests).
  * @param {{ add: Function, list: Function, get: Function, read: Function, remove: Function, clear: Function, maxItems: number }} [deps.history] - durable screenshot history (injectable for tests).
+ * @param {import('./transfer.js').TransferServer} [deps.transfer] - phone-transfer service (injectable for tests).
+ * @param {() => Promise<string[]>} [deps.chooseFiles] - native multi-select file picker (injectable for tests).
  * @returns {{ dispatch: (endpoint: string, payload?: object, signal?: AbortSignal) => Promise<any>, captureFromHotkey: () => Promise<object>, addPinnedEditor: (record: object) => object | null, cancelCapture: () => { cancelled: boolean }, status: () => object, dispose: () => void }} the dispatcher.
  */
-export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history }) {
+export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history, transfer, chooseFiles }) {
   const clipboardApi = clipboard ?? { copyPngToClipboard, copyTextToClipboard, readTextClipboard }
   const revealFile = finder ?? revealInFinder
   const windowsApi = windows ?? { listWindows, selectWindow }
@@ -565,6 +569,122 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
     return { entry, buffer: history.read(id) }
   }
 
+  /**
+   * The phone-transfer service, when this Host mounted one.
+   *
+   * @returns {import('./transfer.js').TransferServer} the service.
+   */
+  function requireTransfer() {
+    if (transfer === undefined || transfer === null) {
+      throw new OpsError('unsupported', 'phone transfer is not available in this build')
+    }
+    return transfer
+  }
+
+  /**
+   * Translate a transfer-layer failure into the dispatcher's error type.
+   *
+   * @param {unknown} failure - thrown value.
+   * @returns {OpsError} the translated failure.
+   */
+  function toTransferOpsError(failure) {
+    if (failure instanceof OpsError) return failure
+    if (failure instanceof TransferError) {
+      const details = failure.details !== null && typeof failure.details === 'object' ? failure.details : {}
+      return new OpsError(failure.code, failure.message, details)
+    }
+    return new OpsError('io_error', failure instanceof Error ? failure.message : String(failure))
+  }
+
+  /**
+   * Open the native multi-select file dialog and return the chosen paths.
+   * Cancelling the dialog is a normal outcome, not a failure.
+   *
+   * @returns {Promise<string[]>} absolute paths; empty when the operator cancelled.
+   */
+  async function chooseFilesForPhone() {
+    const lines = [
+      'set chosen to choose file with multiple selections allowed',
+      'set output to ""',
+      'repeat with picked in chosen',
+      'set output to output & POSIX path of picked & linefeed',
+      'end repeat',
+      'return output',
+    ]
+    /** @type {string[]} */
+    const args = []
+    for (const line of lines) args.push('-e', line)
+    try {
+      const { stdout } = await runProcess('/usr/bin/osascript', args, { timeoutMs: 300_000 })
+      return stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : String(failure)
+      const details = failure !== null && typeof failure === 'object' && failure.details !== null && typeof failure.details === 'object'
+        ? failure.details
+        : {}
+      const stderr = typeof details.stderr === 'string' ? details.stderr : ''
+      if (/User canceled|User cancelled|-128/u.test(`${message} ${stderr}`)) return []
+      throw new OpsError('io_error', `could not open the file picker: ${message}`)
+    }
+  }
+
+  /**
+   * Manage the phone-transfer inbox (items the phone sent to this Mac).
+   *
+   * @param {object} payload - request payload with `action` and optional `id`.
+   * @returns {Promise<object>} the operation value.
+   */
+  async function opTransferInbox(payload) {
+    const service = requireTransfer()
+    const request = asObject(payload)
+    const action = typeof request.action === 'string' ? request.action : 'refresh'
+    try {
+      if (action === 'refresh') return await service.listInbox()
+      if (action === 'clear') return await service.clearInbox()
+      if (action === 'delete') return await service.deleteInbox(requireString(payload, 'id'))
+      if (action === 'copyText') return await service.copyInboxText(requireString(payload, 'id'))
+      if (action === 'reveal') return await service.revealInbox(requireString(payload, 'id'))
+    } catch (failure) {
+      throw toTransferOpsError(failure)
+    }
+    throw new OpsError('invalid_request', `unknown transferInbox action ${JSON.stringify(action)}`, { action })
+  }
+
+  /**
+   * Manage the phone-transfer outbox (items this Mac sends to the phone).
+   *
+   * @param {object} payload - request payload with `action` and action-specific fields.
+   * @returns {Promise<object>} the operation value.
+   */
+  async function opTransferOutbox(payload) {
+    const service = requireTransfer()
+    const request = asObject(payload)
+    const action = typeof request.action === 'string' ? request.action : 'refresh'
+    try {
+      if (action === 'refresh') return await service.listOutbox()
+      if (action === 'clear') return await service.clearOutbox()
+      if (action === 'remove') return await service.removeOutbox(requireString(payload, 'id'))
+      if (action === 'addHistory') return await service.addHistory(requireString(payload, 'id'))
+      if (action === 'addText') {
+        const text = request.text
+        if (typeof text !== 'string' || text.trim() === '') {
+          throw new OpsError('invalid_request', 'text must be a non-empty string', { field: 'text' })
+        }
+        return await service.addText(text)
+      }
+      if (action === 'addFile') {
+        const paths = chooseFiles === undefined ? await chooseFilesForPhone() : await chooseFiles()
+        /** @type {object[]} */
+        const items = []
+        for (const path of paths) items.push((await service.addFile(path)).item)
+        return { cancelled: paths.length === 0, items }
+      }
+    } catch (failure) {
+      throw toTransferOpsError(failure)
+    }
+    throw new OpsError('invalid_request', `unknown transferOutbox action ${JSON.stringify(action)}`, { action })
+  }
+
   function opStatus() {
     return {
       version,
@@ -586,6 +706,7 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         hideApp: visibility !== undefined && visibility.supported === true,
         pin: pins !== undefined && pins !== null,
         history: history !== undefined && history !== null,
+        transfer: transfer !== undefined && transfer !== null,
       },
       hostPid: process.pid,
       at: new Date().toISOString(),
@@ -697,6 +818,23 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         return opClipboard(payload)
       case 'system':
         return systemInfo()
+      case 'transferStatus':
+        return requireTransfer().status()
+      case 'transferStart':
+        try {
+          return await requireTransfer().start()
+        } catch (failure) {
+          throw toTransferOpsError(failure)
+        }
+      case 'transferStop': {
+        const service = requireTransfer()
+        service.stop()
+        return service.status()
+      }
+      case 'transferInbox':
+        return opTransferInbox(payload)
+      case 'transferOutbox':
+        return opTransferOutbox(payload)
       case 'reveal':
         return opReveal(payload)
       default:

@@ -37,6 +37,11 @@ test('the bundle patch inserts exactly one host-plane row', () => {
   assert.match(patch, /id: mac-tools/u)
   assert.match(patch, /name: 'dsh-mac-tools'/u)
   assert.match(patch, /saveDirectory: ''/u)
+  assert.match(patch, /transferPort: 8791/u)
+  assert.match(patch, /transferDirectory: ''/u)
+  assert.match(patch, /transferSessionMinutes: 30/u)
+  assert.match(patch, /transferMaxFileMB: 512/u)
+  assert.match(patch, /transferAutoCopyText: false/u)
   assert.doesNotMatch(patch, /preset:/u)
 })
 
@@ -67,6 +72,11 @@ test('the native helpers ship with the package', () => {
   assert.match(pin, /AnnotationToolbar/u)
   assert.match(pin, /READY/u)
   assert.ok(statSync(join(root, 'assets/pin.swift')).size > 1024)
+
+  const qrcode = read('assets/qrcode.swift')
+  assert.match(qrcode, /CIQRCodeGenerator/u)
+  assert.match(qrcode, /base64EncodedString/u)
+  assert.ok(statSync(join(root, 'assets/qrcode.swift')).size > 256)
 })
 
 test('the icon is an original SVG within the size limit', () => {
@@ -104,14 +114,14 @@ test('the host half exports the Cordis plugin contract without absolute paths', 
   assert.match(index, /connection\.fetch\.register/u)
   // This project is panel-only: it must not register any model-facing tools.
   assert.doesNotMatch(index, /tools\.register|registerTools|mac_screenshot|mac_calculator/u)
-  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js']) {
+  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js', 'src/transfer.js', 'src/transfer-qr.js', 'src/transfer-page.js']) {
     const source = read(relative)
     assert.doesNotMatch(source, /\/Users\/|file:\/\//u, `${relative} must not embed absolute paths`)
   }
 })
 
 test('every source module parses as ESM JavaScript', async () => {
-  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js']) {
+  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js', 'src/transfer.js', 'src/transfer-qr.js', 'src/transfer-page.js']) {
     // Checking the module namespace would evaluate imports that only resolve in
     // the harness; `node --check` covers syntax, and each pure module has its
     // own functional test file.

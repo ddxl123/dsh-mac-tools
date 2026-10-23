@@ -1,5 +1,11 @@
 # dsh-mac-tools — Client half contract (for the UI builder)
 
+> Historical note: this document describes the original three-tab build. The
+> phone-transfer tab added later is specified in
+> [`TRANSFER-CONTRACT.md`](TRANSFER-CONTRACT.md) (its ops are
+> `transferStatus`, `transferStart`, `transferStop`, `transferInbox`,
+> `transferOutbox`, and `GET /api/dsh-mac-tools?inbox=<id>` serves a preview).
+
 You are building the **browser half** of the `dsh-mac-tools` bundle: a Mac toolbox panel in the
 DeepSeek Harness Web GUI. The Host half (being written in parallel by the Lead) owns screen capture,
 the calculator engine, the clipboard, system info and the HTTP route. Your file is

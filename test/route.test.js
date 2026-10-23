@@ -39,6 +39,10 @@ function makeRoute(overrides = {}) {
       if (historyId !== 'hgood') throw new Error('unknown')
       return pngHeaderBytes()
     },
+    readInboxFile: (inboxId) => {
+      if (inboxId !== 'igood') throw new Error('unknown')
+      return { buffer: pngHeader(), mime: 'image/png', name: 'photo.png' }
+    },
     warn: () => {},
     ...overrides,
   })
@@ -138,4 +142,45 @@ test('serves durable history captures through the same image route', async () =>
 
   const unknown = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?history=nope`))
   assert.equal(unknown.status, 404)
+})
+
+test('serves phone-inbox files with their own content type', async () => {
+  const { route } = makeRoute()
+  const response = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?inbox=igood`))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'image/png')
+  assert.match(String(response.headers.get('content-disposition')), /^inline; filename\*=UTF-8''photo\.png$/u)
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+  assert.match(String(response.headers.get('content-security-policy')), /default-src 'none'/u)
+  const bytes = Buffer.from(await response.arrayBuffer())
+  assert.equal(bytes.byteLength, 33)
+
+  const unknown = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?inbox=nope`))
+  assert.equal(unknown.status, 404)
+
+  const unavailable = makeRoute({ readInboxFile: undefined })
+  const missing = await unavailable.route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?inbox=igood`))
+  assert.equal(missing.status, 404)
+})
+
+test('never serves a phone upload as inline active content', async () => {
+  // The phone controls both the bytes and the declared Content-Type, so a
+  // text/html or image/svg+xml inbox item must come back as a download with an
+  // inert type; otherwise it would run script on the Web UI's own origin.
+  const html = Buffer.from('<script>globalThis.pwned=1</script>', 'utf8')
+  const unsafe = makeRoute({
+    readInboxFile: () => ({ buffer: html, mime: 'text/html', name: 'evil.html' }),
+  })
+  const response = await unsafe.route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?inbox=igood`))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'application/octet-stream')
+  assert.match(String(response.headers.get('content-disposition')), /^attachment; filename\*=UTF-8''evil\.html$/u)
+  assert.match(String(response.headers.get('content-security-policy')), /sandbox/u)
+
+  const svg = makeRoute({
+    readInboxFile: () => ({ buffer: Buffer.from('<svg onload="globalThis.pwned=1"/>'), mime: 'image/svg+xml', name: 'evil.svg' }),
+  })
+  const svgResponse = await svg.route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?inbox=igood`))
+  assert.equal(svgResponse.headers.get('content-type'), 'application/octet-stream')
+  assert.match(String(svgResponse.headers.get('content-disposition')), /^attachment;/u)
 })

@@ -40,6 +40,9 @@ import { createOps, expandHome } from './ops.js'
 import { PinManager } from './pin.js'
 import { API_PATH, createRoute } from './route.js'
 import { ShotStore } from './store.js'
+import { TransferServer } from './transfer.js'
+import { renderTransferPage } from './transfer-page.js'
+import { generateQrPng } from './transfer-qr.js'
 import { AppVisibility, resolveHostApp } from './visibility.js'
 
 /** Stable Cordis plugin name; the bundle row's package is `dsh-mac-tools`. */
@@ -142,6 +145,42 @@ export function apply(ctx, rawConfig) {
     warn,
   })
 
+  // Phone transfer is a temporary LAN listener the panel starts on demand. It
+  // is macOS-only because the receive side uses the native notification,
+  // clipboard and file-picker helpers this toolbox already owns.
+  //
+  // The service is built eagerly so the panel can show the persisted inbox as
+  // soon as it opens, but its constructor touches the receiving directory and
+  // the persisted index. A failure there (unwritable folder, corrupt state)
+  // must cost only the transfer tab — never the whole panel, which is why the
+  // construction below is contained instead of failing the plugin row.
+  const transferDirectory = expandHome(
+    config.transferDirectory !== '' ? config.transferDirectory : '~/Downloads/DSH 手机互传',
+  )
+  /** @type {TransferServer | null} */
+  let transfer = null
+  if (process.platform === 'darwin') {
+    try {
+      transfer = new TransferServer({
+        directory: transferDirectory,
+        stateDirectory: join(pluginStateDirectory(ctx), 'transfer'),
+        port: config.transferPort,
+        sessionMinutes: config.transferSessionMinutes,
+        maxFileBytes: config.transferMaxFileMB * 1024 * 1024,
+        autoCopyText: config.transferAutoCopyText,
+        history,
+        page: renderTransferPage,
+        qr: (text) => generateQrPng(text),
+        notify: (message) => captureModule.showNotification(message),
+        copyText: (text) => captureModule.copyTextToClipboard(text),
+        warn,
+      })
+    } catch (error) {
+      warn('phone transfer is unavailable because its service could not be created', error)
+      transfer = null
+    }
+  }
+
   // Pinned images need a native always-on-top window; macOS only. A pinned
   // window's "Edit" action raises the app and hands the image to the panel.
   const pins = process.platform === 'darwin'
@@ -164,6 +203,7 @@ export function apply(ctx, rawConfig) {
     history,
     ...(hotkey === null ? {} : { hotkey }),
     ...(pins === null ? {} : { pins }),
+    ...(transfer === null ? {} : { transfer }),
   })
 
   // The temporary capture directory belongs to the row: unloading or
@@ -171,6 +211,14 @@ export function apply(ctx, rawConfig) {
   ctx.effect(() => () => {
     ops.dispose()
   }, 'dsh-mac-tools: temporary captures')
+
+  // An open phone-transfer session belongs to the row too: unloading closes
+  // the LAN listener instead of leaving an unauthenticated port behind.
+  if (transfer !== null) {
+    ctx.effect(() => () => {
+      transfer.dispose()
+    }, 'dsh-mac-tools: phone transfer')
+  }
 
   // Pinned windows and their edit socket belong to the row: unloading closes
   // every pin instead of leaving floating windows behind.
@@ -191,6 +239,7 @@ export function apply(ctx, rawConfig) {
         dispatch: ops.dispatch,
         readImage: (shotId) => store.read(shotId),
         readHistoryImage: (historyId) => history.read(historyId),
+        ...(transfer === null ? {} : { readInboxFile: (inboxId) => transfer.readInboxFile(inboxId) }),
         warn,
       })),
       'dsh-mac-tools: api route',
@@ -219,6 +268,7 @@ export function apply(ctx, rawConfig) {
   ctx.logger?.info?.(
     `Mac Tools ${version} active: captures in ${store.directory}, saves in ${saveDirectory}`
     + `, history ${history.indexPath}`
+    + (transfer === null ? '' : `, phone transfer inbox ${transferDirectory}`)
     + (visibility.supported ? `, hide-app ${visibility.appName ?? 'unknown'}` : ', hide-app unsupported'),
   )
 }

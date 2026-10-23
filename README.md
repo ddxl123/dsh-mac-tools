@@ -10,6 +10,9 @@ A local macOS toolbox in **one** DeepSeek Harness plugin:
   redo, copy to the clipboard and save to disk.
 - **Calculator** — a full calculator panel plus an exact expression engine that
   the agent can call.
+- **Phone transfer** — scan a QR code with a phone on the same Wi-Fi and send
+  text, files and photos to the Mac (or pull screenshots and files back), all
+  through the phone's browser. No app install, nothing leaves the local network.
 - **Clipboard** — read and write the macOS text clipboard from the panel or the
   agent.
 - **System information** — macOS version, CPU, memory, disk, battery and
@@ -35,7 +38,9 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-mac-tools
 A local directory install links the checkout. Reload the Web page after
 installation; the **Mac Tools** entry appears in the left rail. If the Host half
 was already running when you installed, a restart of DeepSeek Harness is the
-reliable way to get both halves on the same version.
+reliable way to get both halves on the same version. In **Creator mode** (HMR
+enabled) no restart is needed: toggling the `mac-tools` row off and on in the
+Plugins page recomposes the profile and reloads the linked Host files in place.
 
 ### Permissions
 
@@ -116,6 +121,39 @@ macOS version, architecture, hostname, CPU model and cores, memory with a usage
 bar, root disk capacity, battery (when present) and uptime. Refreshes every ten
 seconds while visible; the same facts are available through the tool.
 
+### Phone tab
+
+A LAN-only bridge between the Mac and a phone browser. Press **开启手机互传**;
+the Host starts a temporary HTTP listener, shows a **QR code** (and the URL), and
+counts down the session. Scan the code with the phone's system camera (or type
+the URL) and the phone opens a small web page — no app, no account, no cloud.
+
+- **Phone → Mac**: send text (lands in the panel inbox, with one-click copy to
+  the macOS clipboard and optional auto-copy), pick files/photos, or take a
+  photo with the camera and upload it. Uploads show progress and are saved to
+  the transfer directory (`~/Downloads/DSH 手机互传` by default), so the agent
+  can read and process them like any other file.
+- **Mac → Phone**: type text, choose any file with the native picker, or tap
+  **发送到手机** on a recent screenshot; the phone page lists them for preview,
+  copy or download. Screenshots are served straight from the history.
+- **Security**: one random token per session, 30-minute expiry, the listener
+  only exists while the session is open, and the server rejects foreign `Host`
+  headers and malformed file names. Nothing is exposed to the internet.
+  Downloads are sent as `attachment` + `application/octet-stream` (never as
+  renderable pages), so Android/iOS browsers and their download managers save
+  them natively instead of opening them in a tab.
+- **Notes**: the Mac and the phone must be on the same Wi-Fi network (guest
+  networks with AP isolation will not work), the first start may ask macOS to
+  allow incoming connections for DeepSeek Harness, and a phone VPN can block
+  LAN access. macOS may also ask for Local Network permission on recent
+  releases. The Mac should stay awake during a transfer.
+- **Troubleshooting**: if a phone upload stays at 0% or a download does
+  nothing, reopen the page once and retry; the phone page now reports browser
+  errors to `<plugin state>/transfer/diagnostics.log` (next to the plugin's
+  other state, under `~/.dsh/dsh-mac-tools/transfer/`), together with every
+  upload start/finish and download request, so the failing step is visible
+  without remote debugging.
+
 ## Configuration
 
 The bundle row accepts these keys in `cordis.patch.yml` (or a later patch
@@ -131,6 +169,11 @@ layer); every key has a default.
 | `globalHotkeySound` | `true` | Play the Glass sound after a global-hotkey capture. |
 | `pinAfterGlobalCapture` | `true` | Pin a global-hotkey capture to the screen (the panel editor always has an explicit pin button). |
 | `historyLimit` | `60` | How many screenshots the panel history keeps; older captures are deleted. |
+| `transferPort` | `8791` | Preferred port for the temporary phone-transfer listener; the next 9 ports are tried when it is taken. |
+| `transferDirectory` | `~/Downloads/DSH 手机互传` | Where files sent by the phone are saved, with `~` expanded. |
+| `transferSessionMinutes` | `30` | How long one phone-transfer session stays open before the QR code expires. |
+| `transferMaxFileMB` | `512` | Largest single file a phone may upload, in megabytes. |
+| `transferAutoCopyText` | `false` | Copy text received from the phone to the macOS clipboard automatically. |
 
 ```yaml
 - id: mac-tools
@@ -142,32 +185,51 @@ layer); every key has a default.
 ## How it is built
 
 - **Native helpers** (`assets/`): `hotkey.swift` listens for the system-wide
-  shortcut, `pin.swift` shows a pinned screenshot as a floating AppKit window.
-  Both are compiled once with `swiftc` and cached in the temporary directory.
+  shortcut, `pin.swift` shows a pinned screenshot as a floating AppKit window,
+  and `qrcode.swift` renders the phone-transfer QR code with CoreImage. All are
+  compiled once with `swiftc` and cached in the temporary directory.
 - **Host half** (`src/`): registers the authenticated `/api/dsh-mac-tools`
   route on Connection's `/api` channel, owns the temporary capture registry,
   runs `/usr/sbin/screencapture` for capture and `/usr/bin/osascript` for the
-  window list and image clipboard. No agent tools are registered.
+  window list, the image clipboard and the file picker. The phone-transfer
+  listener (`src/transfer.js`) is a separate, on-demand `node:http` server bound
+  to the LAN only while a session is active; it serves the phone page and the
+  upload/download API, and keeps its inbox/outbox index in the plugin state
+  directory. No agent tools are registered.
 - **Client half** (`client/index.js`): one plain-React bundle loaded by
   `window.__ModuleLoader__`. It registers the rail entry and the `main` panel,
-  renders the three tabs, and talks to the Host only through the route above.
+  renders the four tabs, and talks to the Host only through the route above.
 - The capture engine is a thin wrapper over the system utility a person already
   granted Screen Recording to; region/window selection, cancellation and window
   picking are native macOS behavior, not reimplemented.
 
 ```
 POST /api/dsh-mac-tools   { "endpoint": "...", "payload": { ... } }
-GET  /api/dsh-mac-tools?shot=<id>   → image/png
+GET  /api/dsh-mac-tools?shot=<id>    → image/png (temporary capture)
+GET  /api/dsh-mac-tools?history=<id> → image/png (durable history capture)
+GET  /api/dsh-mac-tools?inbox=<id>   → bytes of a file the phone sent
 ```
 
+The `?inbox=` preview keeps only inert raster images (`png`, `jpeg`, `gif`,
+`webp`, `avif`, `bmp`) inline; every other received file is answered as an
+`application/octet-stream` attachment, so a phone-supplied HTML or SVG file can
+never execute in the Web UI's origin.
+
 Endpoints: `status`, `windows`, `capture`, `cancelCapture`, `copy`, `save`,
-`calc`, `clipboard`, `system`, `reveal`. Answers are
-`{ ok: true, value }` or `{ ok: false, error: { code, message, details } }`.
+`calc`, `clipboard`, `system`, `reveal`, and the phone-transfer group
+`transferStatus`, `transferStart`, `transferStop`, `transferInbox`,
+`transferOutbox`. Answers are `{ ok: true, value }` or
+`{ ok: false, error: { code, message, details } }`.
+
+The phone talks to its own temporary server under
+`http://<mac-lan-ip>:<port>/t/<token>/` (page, `api/state`, `api/text`,
+`api/upload`, `api/items/<id>`); that listener is not the Harness API and
+carries no Harness session.
 
 ## Development
 
 ```
-node --check src/index.js && node --test test/
+npm run check     # node --check every module + node --test test/
 ```
 
 The host half is dependency-free apart from the `@deepseek-ai/schemastery`

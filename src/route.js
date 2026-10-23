@@ -18,24 +18,40 @@ import { OpsError } from './ops.js'
 export const API_PATH = '/api/dsh-mac-tools'
 
 /**
+ * Raster image types safe to render inline as a panel thumbnail.
+ *
+ * `image/svg+xml` is deliberately absent: an SVG document may carry script, and
+ * a phone-supplied upload must never be able to run code in the Web UI origin.
+ */
+const INLINE_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+])
+
+/**
  * Build the route object `ctx.connection.fetch.register` accepts.
  *
  * @param {object} deps - route dependencies.
  * @param {(endpoint: string, payload: object, signal?: AbortSignal) => Promise<any>} deps.dispatch - operation dispatcher.
  * @param {(shotId: string) => Buffer} deps.readImage - screenshots by id.
  * @param {(historyId: string) => Buffer} [deps.readHistoryImage] - durable history captures by id.
+ * @param {(inboxId: string) => { buffer: Buffer, mime: string, name: string }} [deps.readInboxFile] - files the phone sent, by inbox item id.
  * @param {string} [deps.version] - plugin version (unused by the wire, kept for diagnostics).
  * @param {(message: string, error: unknown) => void} [deps.warn] - unexpected-failure sink.
  * @returns {{ path: string, methods: string[], requestBody: 'buffered', fetch: (request: Request) => Promise<Response> }} the route.
  */
-export function createRoute({ dispatch, readImage, readHistoryImage, warn = () => {} }) {
+export function createRoute({ dispatch, readImage, readHistoryImage, readInboxFile, warn = () => {} }) {
   return {
     path: API_PATH,
     methods: ['GET', 'POST'],
     requestBody: 'buffered',
     async fetch(request) {
       const url = new URL(request.url, 'http://dsh.internal')
-      if (request.method === 'GET') return serveImage(url, readImage, readHistoryImage)
+      if (request.method === 'GET') return serveImage(url, readImage, readHistoryImage, readInboxFile)
       if (request.method !== 'POST') {
         return new Response('method not allowed', { status: 405, headers: { allow: 'GET, POST' } })
       }
@@ -45,21 +61,56 @@ export function createRoute({ dispatch, readImage, readHistoryImage, warn = () =
 }
 
 /**
- * Serve one stored screenshot as an image response.
+ * Serve one stored screenshot, history capture or phone-inbox file.
  *
- * @param {URL} url - request URL carrying `shot`.
+ * @param {URL} url - request URL carrying `shot`, `history` or `inbox`.
  * @param {(shotId: string) => Buffer} readImage - image lookup.
- * @returns {Response} the image or a plain refusal.
+ * @param {(historyId: string) => Buffer} [readHistoryImage] - history image lookup.
+ * @param {(inboxId: string) => { buffer: Buffer, mime: string, name: string }} [readInboxFile] - phone-inbox file lookup.
+ * @returns {Response} the bytes or a plain refusal.
  */
-function serveImage(url, readImage, readHistoryImage) {
+function serveImage(url, readImage, readHistoryImage, readInboxFile) {
   const shotId = url.searchParams.get('shot')
   const historyId = url.searchParams.get('history')
-  if ((shotId === null || shotId === '') && (historyId === null || historyId === '')) {
-    return new Response('missing shot or history parameter', { status: 400 })
+  const inboxId = url.searchParams.get('inbox')
+  const hasShot = shotId !== null && shotId !== ''
+  const hasHistory = historyId !== null && historyId !== ''
+  const hasInbox = inboxId !== null && inboxId !== ''
+  if (!hasShot && !hasHistory && !hasInbox) {
+    return new Response('missing shot, history or inbox parameter', { status: 400 })
+  }
+  if (hasInbox) {
+    if (typeof readInboxFile !== 'function') return new Response('phone inbox files are unavailable', { status: 404 })
+    try {
+      const file = readInboxFile(inboxId)
+      const buffer = file !== null && typeof file === 'object' && Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.alloc(0)
+      const declaredMime = typeof file?.mime === 'string' ? file.mime.split(';', 1)[0]?.trim().toLowerCase() ?? '' : ''
+      // A phone chooses the upload's bytes and its Content-Type, so this route
+      // is a stored-content surface: serving e.g. `text/html` or `image/svg+xml`
+      // inline on the Web UI's own origin would execute phone-supplied script.
+      // Only inert raster formats stay inline; everything else is a download.
+      const inline = INLINE_IMAGE_MIMES.has(declaredMime)
+      const name = typeof file?.name === 'string' && file.name !== '' ? file.name : 'inbox-item'
+      return new Response(buffer, {
+        status: 200,
+        headers: {
+          'content-type': inline ? declaredMime : 'application/octet-stream',
+          'content-length': String(buffer.byteLength),
+          'cache-control': 'no-store',
+          'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+          'x-content-type-options': 'nosniff',
+          // Defense in depth: even a mis-classified inline response cannot run
+          // script or reach the network if it is opened as a document.
+          'content-security-policy': "default-src 'none'; sandbox",
+        },
+      })
+    } catch {
+      return new Response('unknown phone inbox file', { status: 404 })
+    }
   }
   let bytes
   try {
-    bytes = shotId !== null && shotId !== ''
+    bytes = hasShot
       ? readImage(shotId)
       : (typeof readHistoryImage === 'function'
         ? readHistoryImage(historyId)

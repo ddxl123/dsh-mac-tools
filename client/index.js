@@ -7,8 +7,9 @@
  *     which the shell opens through `layout.selectPanel(id)`.
  *   - `main` keyed by the same id — the panel page itself: a QQ-style screenshot
  *     tab (native capture, window picker, crop and annotation editor), a
- *     calculator driven by the Host's own evaluator, and a system-information
- *     dashboard.
+ *     calculator driven by the Host's own evaluator, a system-information
+ *     dashboard, and a phone-transfer tab that starts a temporary LAN page a
+ *     phone can open by QR code to exchange text, files and screenshots.
  *   - two global shortcuts: `primary+alt+KeyM` toggles the panel, and
  *     `primary+shift+KeyA` starts an interactive capture and brings the panel
  *     forward with the editor already mounted.
@@ -61,16 +62,28 @@ window.__ModuleLoader__.load({
     const API_PATH = '/api/dsh-mac-tools'
 
     /** The tab order used by the tablist and its arrow-key navigation. */
-    const TABS = ['screenshot', 'calculator', 'system']
+    const TABS = ['screenshot', 'calculator', 'system', 'transfer']
     /** How many successful evaluations the calculator remembers. */
     const CALC_HISTORY_LIMIT = 10
     /** How often the system tab refreshes while it is the visible tab. */
     const SYSTEM_POLL_MS = 10000
+    /** How often the transfer tab polls the session state while visible. */
+    const TRANSFER_STATUS_POLL_MS = 2000
+    /** How often the transfer tab polls its two item lists while visible. */
+    const TRANSFER_LIST_POLL_MS = 4000
+    /** How often the transfer tab re-renders its local session countdown. */
+    const TRANSFER_CLOCK_POLL_MS = 1000
+    /** How long one transfer toast stays on screen. */
+    const TRANSFER_TOAST_MS = 3000
+    /** How many recent screenshots the outbox offers as one-tap sends. */
+    const TRANSFER_RECENT_SCREENSHOTS = 6
+    /** The data-URL prefix a base64 QR PNG is rendered through. */
+    const TRANSFER_QR_PREFIX = 'data:image/png;base64,'
 
     const zh = {
       'panel': 'Mac 工具箱',
       'title': 'Mac 工具箱',
-      'subtitle': '截图与标注、计算器、系统信息 —— 全部在本机完成。',
+      'subtitle': '截图与标注、计算器、手机互传、系统信息 —— 全部在本机完成。',
       'hostAria': 'Host 连接状态',
       'host.loading': '正在连接本地 Host…',
       'host.ready': 'Host 已连接 · v{version}',
@@ -83,8 +96,10 @@ window.__ModuleLoader__.load({
       'tab.screenshot': '截图',
       'tab.calculator': '计算器',
       'tab.system': '系统信息',
+      'tab.transfer': '手机互传',
       'common.close': '关闭',
       'common.retry': '重试',
+      'common.cancel': '取消',
       'common.dismiss': '知道了',
       'capture.primary': '区域 / 窗口截图',
       'capture.full': '全屏截图',
@@ -282,12 +297,83 @@ window.__ModuleLoader__.load({
       'duration.second': '{n} 秒',
       'shortcut.toggle': '打开或关闭 Mac 工具箱',
       'shortcut.screenshot': '快速截图（区域 / 窗口）',
+      'transfer.title': '手机互传',
+      'transfer.subtitle': '在同一个 Wi-Fi 下，用手机扫码打开网页，双向发送文本、文件和截图。',
+      'transfer.start': '开启手机互传',
+      'transfer.starting': '正在开启…',
+      'transfer.stop': '停止互传',
+      'transfer.stopping': '正在停止…',
+      'transfer.loading': '正在读取互传状态…',
+      'transfer.refresh': '刷新',
+      'transfer.active': '互传进行中',
+      'transfer.qrAlt': '手机扫码打开互传页面的二维码',
+      'transfer.qrFallback': '二维码不可用',
+      'transfer.qrError': '二维码生成失败：{message}',
+      'transfer.urlLabel': '手机访问地址',
+      'transfer.copyUrl': '复制链接',
+      'transfer.urlCopied': '已复制链接',
+      'transfer.copyFailed': '复制失败：{message}',
+      'transfer.clipboardUnavailable': '剪贴板不可用',
+      'transfer.urlsTitle': '局域网地址',
+      'transfer.remaining': '剩余 {duration}',
+      'transfer.expired': '已过期',
+      'transfer.wifiHint': '手机需要与这台 Mac 连接同一个 Wi-Fi；如果手机打不开页面，请检查 macOS 防火墙是否放行。',
+      'transfer.directory': '接收目录：{directory}',
+      'transfer.sessionMinutes': '会话时长 {minutes} 分钟',
+      'transfer.maxFile': '单个文件上限 {megabytes} MB',
+      'transfer.inbox.title': '手机发来的内容',
+      'transfer.inbox.count': '{count} 项',
+      'transfer.inbox.empty': '还没有收到内容。用手机扫码打开网页后，即可发送文本、文件或照片。',
+      'transfer.inbox.error': '无法读取收件箱：{message}',
+      'transfer.inbox.loading': '正在读取收件箱…',
+      'transfer.inbox.clear': '清空',
+      'transfer.inbox.clearConfirm': '确认清空？',
+      'transfer.inbox.copy': '复制',
+      'transfer.inbox.reveal': '在 Finder 中显示',
+      'transfer.inbox.delete': '删除',
+      'transfer.inbox.previewAlt': '手机发来的图片',
+      'transfer.outbox.title': '发送到手机',
+      'transfer.outbox.count': '{count} 项',
+      'transfer.outbox.empty': '还没有要发送的内容。发送文本、文件或最近截图后，手机会自动出现。',
+      'transfer.outbox.error': '无法读取发件箱：{message}',
+      'transfer.outbox.loading': '正在读取发件箱…',
+      'transfer.outbox.clear': '清空',
+      'transfer.outbox.clearConfirm': '确认清空？',
+      'transfer.outbox.remove': '移除',
+      'transfer.outbox.textPlaceholder': '输入要发送到手机的文本…（⌘/Ctrl+Enter 发送）',
+      'transfer.outbox.send': '发送',
+      'transfer.outbox.sending': '发送中…',
+      'transfer.outbox.chooseFile': '选择文件…',
+      'transfer.outbox.choosingFile': '正在选择…',
+      'transfer.outbox.recent': '最近截图',
+      'transfer.outbox.recentEmpty': '还没有历史截图。',
+      'transfer.outbox.sendHistory': '发送到手机',
+      'transfer.kind.text': '文本',
+      'transfer.kind.file': '文件',
+      'transfer.kind.history': '截图',
+      'transfer.toast.failed': '操作失败',
+      'transfer.toast.sent': '已发送到手机',
+      'transfer.toast.copied': '已复制文本',
+      'transfer.toast.revealed': '已在 Finder 中显示',
+      'transfer.toast.deleted': '已删除',
+      'transfer.toast.cleared': '已清空',
+      'transfer.toast.removed': '已移除',
+      'transfer.toast.fileAdded': '已添加到发件箱',
+      'transfer.toast.filesAdded': '已添加 {count} 个文件',
+      'transfer.error.unsupported': '当前版本不支持手机互传。',
+      'transfer.error.not_found': '条目不存在或文件已被移动。',
+      'transfer.error.invalid_request': '请求无效，请重试。',
+      'transfer.error.too_large': '内容超出大小上限。',
+      'transfer.error.io_error': '读写失败：{message}',
+      'transfer.error.port_unavailable': '端口被占用，无法开启互传，请稍后重试。',
+      'transfer.error.not_active': '手机互传尚未开启。',
+      'transfer.error.generic': '互传失败（{code}）：{message}',
     }
 
     const en = {
       'panel': 'Mac Tools',
       'title': 'Mac Tools',
-      'subtitle': 'Screenshots and annotations, a calculator, and system information — all local.',
+      'subtitle': 'Screenshots and annotations, a calculator, phone transfer, and system information — all local.',
       'hostAria': 'Host connection status',
       'host.loading': 'Connecting to the local Host…',
       'host.ready': 'Host connected · v{version}',
@@ -300,8 +386,10 @@ window.__ModuleLoader__.load({
       'tab.screenshot': 'Screenshot',
       'tab.calculator': 'Calculator',
       'tab.system': 'System',
+      'tab.transfer': 'Phone',
       'common.close': 'Close',
       'common.retry': 'Retry',
+      'common.cancel': 'Cancel',
       'common.dismiss': 'Dismiss',
       'capture.primary': 'Region / window capture',
       'capture.full': 'Full screen',
@@ -499,6 +587,77 @@ window.__ModuleLoader__.load({
       'duration.second': '{n}s',
       'shortcut.toggle': 'Toggle Mac Tools',
       'shortcut.screenshot': 'Quick screenshot (region / window)',
+      'transfer.title': 'Phone transfer',
+      'transfer.subtitle': 'Scan the QR code with a phone on the same Wi-Fi to send text, files and screenshots both ways.',
+      'transfer.start': 'Start phone transfer',
+      'transfer.starting': 'Starting…',
+      'transfer.stop': 'Stop transfer',
+      'transfer.stopping': 'Stopping…',
+      'transfer.loading': 'Reading the transfer state…',
+      'transfer.refresh': 'Refresh',
+      'transfer.active': 'Transfer running',
+      'transfer.qrAlt': 'QR code that opens the phone-transfer page',
+      'transfer.qrFallback': 'QR code unavailable',
+      'transfer.qrError': 'Could not generate the QR code: {message}',
+      'transfer.urlLabel': 'Phone address',
+      'transfer.copyUrl': 'Copy link',
+      'transfer.urlCopied': 'Link copied',
+      'transfer.copyFailed': 'Copy failed: {message}',
+      'transfer.clipboardUnavailable': 'the clipboard is unavailable',
+      'transfer.urlsTitle': 'LAN addresses',
+      'transfer.remaining': '{duration} left',
+      'transfer.expired': 'Expired',
+      'transfer.wifiHint': 'The phone must be on the same Wi-Fi as this Mac; if the page does not open, check the macOS firewall.',
+      'transfer.directory': 'Receiving folder: {directory}',
+      'transfer.sessionMinutes': 'Session: {minutes} min',
+      'transfer.maxFile': 'Max file size: {megabytes} MB',
+      'transfer.inbox.title': 'From your phone',
+      'transfer.inbox.count': '{count} items',
+      'transfer.inbox.empty': 'Nothing received yet. Scan the QR code on your phone and send text, files or photos.',
+      'transfer.inbox.error': 'Cannot read the inbox: {message}',
+      'transfer.inbox.loading': 'Reading the inbox…',
+      'transfer.inbox.clear': 'Clear',
+      'transfer.inbox.clearConfirm': 'Clear everything?',
+      'transfer.inbox.copy': 'Copy',
+      'transfer.inbox.reveal': 'Show in Finder',
+      'transfer.inbox.delete': 'Delete',
+      'transfer.inbox.previewAlt': 'Image from the phone',
+      'transfer.outbox.title': 'To your phone',
+      'transfer.outbox.count': '{count} items',
+      'transfer.outbox.empty': 'Nothing sent yet. Send text, a file or a recent screenshot and it appears on the phone.',
+      'transfer.outbox.error': 'Cannot read the outbox: {message}',
+      'transfer.outbox.loading': 'Reading the outbox…',
+      'transfer.outbox.clear': 'Clear',
+      'transfer.outbox.clearConfirm': 'Clear everything?',
+      'transfer.outbox.remove': 'Remove',
+      'transfer.outbox.textPlaceholder': 'Text to send to your phone… (⌘/Ctrl+Enter to send)',
+      'transfer.outbox.send': 'Send',
+      'transfer.outbox.sending': 'Sending…',
+      'transfer.outbox.chooseFile': 'Choose a file…',
+      'transfer.outbox.choosingFile': 'Choosing…',
+      'transfer.outbox.recent': 'Recent screenshots',
+      'transfer.outbox.recentEmpty': 'No screenshots yet.',
+      'transfer.outbox.sendHistory': 'Send to phone',
+      'transfer.kind.text': 'Text',
+      'transfer.kind.file': 'File',
+      'transfer.kind.history': 'Screenshot',
+      'transfer.toast.failed': 'Action failed',
+      'transfer.toast.sent': 'Sent to your phone',
+      'transfer.toast.copied': 'Text copied',
+      'transfer.toast.revealed': 'Shown in Finder',
+      'transfer.toast.deleted': 'Deleted',
+      'transfer.toast.cleared': 'Cleared',
+      'transfer.toast.removed': 'Removed',
+      'transfer.toast.fileAdded': 'Added to the outbox',
+      'transfer.toast.filesAdded': 'Added {count} files',
+      'transfer.error.unsupported': 'Phone transfer is unavailable in this build.',
+      'transfer.error.not_found': 'That item is gone or its file was moved.',
+      'transfer.error.invalid_request': 'The request was invalid; try again.',
+      'transfer.error.too_large': 'The item exceeds the size limit.',
+      'transfer.error.io_error': 'I/O error: {message}',
+      'transfer.error.port_unavailable': 'The port is unavailable, so phone transfer could not start. Try again later.',
+      'transfer.error.not_active': 'Phone transfer is not running yet.',
+      'transfer.error.generic': 'Phone transfer failed ({code}): {message}',
     }
 
     /**
@@ -706,6 +865,61 @@ window.__ModuleLoader__.load({
 @keyframes dshMacToolsFadeIn{from{opacity:0}to{opacity:1}}
 @keyframes dshMacToolsToastIn{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
 @keyframes dshMacToolsPulse{0%,100%{opacity:1}50%{opacity:.55}}
+.dshMacToolsTransfer{display:flex;flex-direction:column;gap:14px;min-width:0}
+.dshMacToolsTransferCard{padding:16px 18px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);min-width:0}
+.dshMacToolsTransferCardHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dshMacToolsTransferCardTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:15px;font-weight:500;line-height:22px}
+.dshMacToolsTransferCardMeta{flex:1;min-width:120px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsTransferIntroText{margin:6px 0 12px;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;overflow-wrap:anywhere}
+.dshMacToolsTransferStartRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dshMacToolsTransferQrRow{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;margin-top:14px}
+.dshMacToolsTransferQrBox{display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;min-width:0}
+.dshMacToolsTransferQrImage{display:block;width:148px;height:148px;padding:8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-base);image-rendering:pixelated;box-sizing:border-box}
+.dshMacToolsTransferQrFallback{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;width:148px;height:148px;padding:10px;border:.5px dashed var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center;overflow-wrap:anywhere}
+.dshMacToolsTransferSession{display:flex;flex-direction:column;gap:8px;flex:1;min-width:220px}
+.dshMacToolsTransferUrlRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.dshMacToolsTransferUrl{min-width:0;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;line-height:18px;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.dshMacToolsTransferUrls{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.dshMacToolsTransferUrlItem{color:var(--dsw-alias-label-tertiary);font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11px;line-height:17px;overflow-wrap:anywhere}
+.dshMacToolsTransferHint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.dshMacToolsTransferHintError{color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsTransferWarnings{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}
+.dshMacToolsTransferWarning{display:flex;align-items:flex-start;gap:6px;margin:0;color:var(--dsw-alias-state-warn-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.dshMacToolsTransferWarningIcon{display:inline-flex;flex:none;margin-top:2px}
+.dshMacToolsTransferColumns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+.dshMacToolsTransferColumn{display:flex;flex-direction:column;gap:10px;min-width:0;padding:14px 16px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsTransferColHead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dshMacToolsTransferColTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:20px}
+.dshMacToolsTransferColCount{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsTransferColActions{display:flex;align-items:center;gap:2px;flex-wrap:wrap;margin-left:auto}
+.dshMacToolsTransferCompose{display:flex;flex-direction:column;gap:8px}
+.dshMacToolsTransferTextarea{box-sizing:border-box;width:100%;min-height:64px;max-height:180px;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none;resize:vertical;font:inherit;font-size:13px;line-height:20px}
+.dshMacToolsTransferTextarea::placeholder{color:var(--dsw-alias-label-caption)}
+.dshMacToolsTransferTextarea:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsTransferComposeRow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsTransferRecent{display:flex;flex-direction:column;gap:6px}
+.dshMacToolsTransferRecentTitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;letter-spacing:.02em;text-transform:uppercase}
+.dshMacToolsTransferRecentGrid{display:flex;flex-wrap:wrap;gap:6px}
+.dshMacToolsTransferRecentButton{display:block;width:56px;height:56px;flex:none;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);cursor:pointer;overflow:hidden;transition:border-color .15s,opacity .15s}
+.dshMacToolsTransferRecentButton:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsTransferRecentButton:disabled{cursor:not-allowed;opacity:.4}
+.dshMacToolsTransferRecentButton img{display:block;width:100%;height:100%;object-fit:cover}
+.dshMacToolsTransferList{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;max-height:320px;overflow:auto}
+.dshMacToolsTransferRow{display:flex;flex-direction:column;gap:4px;padding:8px 9px;border-radius:10px;transition:background .15s}
+.dshMacToolsTransferRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsTransferRowMain{display:flex;align-items:flex-start;gap:9px;min-width:0}
+.dshMacToolsTransferThumb{width:56px;height:56px;flex:none;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.dshMacToolsTransferThumb img{display:block;width:100%;height:100%;object-fit:cover}
+.dshMacToolsTransferRowText{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}
+.dshMacToolsTransferRowName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsTransferRowPreview{display:-webkit-box;margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow:hidden;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.dshMacToolsTransferRowMeta{margin:0;color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsTransferRowActions{display:flex;align-items:center;gap:2px;flex-wrap:wrap}
+.dshMacToolsTransferBadge{flex:none;margin-left:auto;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);font-size:10px;line-height:16px;white-space:nowrap}
+.dshMacToolsTransferEmpty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;margin:0;padding:22px 14px;border:.5px dashed var(--dsw-alias-border-l2);border-radius:12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center;overflow-wrap:anywhere}
+.dshMacToolsTransferLoading{display:flex;align-items:center;gap:8px;margin:0;padding:14px 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.dshMacToolsTransferSkeleton{height:44px;flex:none;border-radius:10px}
+.dshMacToolsTransferToastRegion{position:relative}
 @media (max-width:760px){
 .dshMacToolsContent{padding:0 20px 32px}
 .dshMacToolsHeading{padding-top:20px;align-items:flex-start;flex-wrap:wrap}
@@ -714,6 +928,8 @@ window.__ModuleLoader__.load({
 .dshMacToolsCalc{max-width:none}
 .dshMacToolsCanvasStage{padding:8px}
 .dshMacToolsEditorHint{display:none}
+.dshMacToolsTransferColumns{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsTransferQrRow{gap:12px}
 }
 @media (prefers-reduced-motion:reduce){
 .dshMacToolsPage *,.dshMacToolsToast,.dshMacToolsTextInput{animation:none!important;transition:none!important}
@@ -1348,6 +1564,112 @@ window.__ModuleLoader__.load({
       return hostErrorText(t, error, 'editor.error')
     }
 
+    /**
+     * Localize a failed phone-transfer request. The Host reports the documented
+     * transfer codes on success paths and the normalized transport codes when
+     * the Host half itself is missing, so both families are covered here.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} error - a classified failure.
+     * @returns {string} the localized message.
+     */
+    function transferErrorText(t, error) {
+      const code = error !== null && error !== undefined && typeof error.code === 'string' ? error.code : ''
+      const message = error !== null && error !== undefined && error.message ? error.message : ''
+      if (code === 'unsupported') return t('transfer.error.unsupported')
+      if (code === 'not_found') return t('transfer.error.not_found')
+      if (code === 'invalid_request') return t('transfer.error.invalid_request')
+      if (code === 'too_large') return t('transfer.error.too_large')
+      if (code === 'io_error') return t('transfer.error.io_error', { message })
+      if (code === 'port_unavailable') return t('transfer.error.port_unavailable')
+      if (code === 'not_active') return t('transfer.error.not_active')
+      if (code === 'host_missing' || code === 'host_unreachable') return hostErrorText(t, error, 'transfer.error.generic')
+      return t('transfer.error.generic', { code: code || 'io_error', message })
+    }
+
+    /**
+     * Format a byte count for one transfer row (B / KB / MB / GB).
+     *
+     * @param {number} bytes - the byte count.
+     * @returns {string} the formatted size.
+     */
+    function transferSizeText(bytes) {
+      if (!Number.isFinite(bytes) || bytes < 0) return '—'
+      if (bytes < 1024) return `${Math.round(bytes)} B`
+      const units = ['KB', 'MB', 'GB']
+      let value = bytes / 1024
+      let unit = 0
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024
+        unit += 1
+      }
+      const rounded = value >= 10 ? String(Math.round(value)) : value.toFixed(1)
+      return `${rounded} ${units[unit]}`
+    }
+
+    /**
+     * Format the remaining session time as a locally ticking clock.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string|null} expiresAt - the session expiry as an ISO string.
+     * @param {number} now - the local clock in epoch milliseconds.
+     * @returns {string} the countdown, or an empty string when unknown.
+     */
+    function transferCountdownText(t, expiresAt, now) {
+      const stamp = typeof expiresAt === 'string' ? Date.parse(expiresAt) : NaN
+      if (!Number.isFinite(stamp)) return ''
+      const remaining = stamp - now
+      if (remaining <= 0) return t('transfer.expired')
+      const total = Math.ceil(remaining / 1000)
+      const hours = Math.floor(total / 3600)
+      const minutes = Math.floor((total % 3600) / 60)
+      const seconds = total % 60
+      const pad = (value) => (value < 10 ? `0${value}` : String(value))
+      const clock = hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`
+      return t('transfer.remaining', { duration: clock })
+    }
+
+    /**
+     * The type tag of one transfer item.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string} kind - `text`, `file` or `history`.
+     * @returns {string} the localized tag.
+     */
+    function transferKindLabel(t, kind) {
+      if (kind === 'text') return t('transfer.kind.text')
+      if (kind === 'history') return t('transfer.kind.history')
+      return t('transfer.kind.file')
+    }
+
+    /**
+     * Clamp a text item to a readable preview. Text items may be up to 64 KiB
+     * each and the inbox keeps 200 of them, so the list never puts the whole
+     * body in the DOM.
+     *
+     * @param {string} text - the item text.
+     * @returns {string} the preview.
+     */
+    function transferPreviewText(text) {
+      const value = String(text)
+      return value.length > 240 ? `${value.slice(0, 240)}…` : value
+    }
+
+    /**
+     * Localize one transfer toast. `text` holds the success locale key; a
+     * failure carries the normalized error instead, so the store never needs
+     * the locale service.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} toast - the store's toast value.
+     * @returns {string} the toast text.
+     */
+    function transferToastText(t, toast) {
+      if (toast === null || toast === undefined) return ''
+      if (toast.error !== null && toast.error !== undefined) return transferErrorText(t, toast.error)
+      return t(toast.text, toast.params)
+    }
+
     // ---------------------------------------------------------------------
     // Glyphs
     // ---------------------------------------------------------------------
@@ -1457,6 +1779,12 @@ window.__ModuleLoader__.load({
         ['circle', { cx: 10, cy: 10, r: 2.6 }],
         ['path', { d: 'M10 2.8 V5 M10 15 V17.2 M2.8 10 H5 M15 10 H17.2 M4.9 4.9 L6.4 6.4 M13.6 13.6 L15.1 15.1 M15.1 4.9 L13.6 6.4 M6.4 13.6 L4.9 15.1' }],
       ],
+      qr: [
+        ['rect', { x: 3, y: 3, width: 5, height: 5, rx: 0.8 }],
+        ['rect', { x: 12, y: 3, width: 5, height: 5, rx: 0.8 }],
+        ['rect', { x: 3, y: 12, width: 5, height: 5, rx: 0.8 }],
+        ['path', { d: 'M12.2 12.2 H14.2 V14.2 H12.2 Z M15.6 12.2 H17.2 M12.2 15.6 H14.2 V17.2 M15.6 15.6 H17.2 V17.2' }],
+      ],
     }
 
     /**
@@ -1504,7 +1832,7 @@ window.__ModuleLoader__.load({
      *   - anything else — the Host answered and refused the operation, and the
      *     code is the endpoint's documented reason (`cancelled`, `busy`, …).
      *
-     * @returns {{ post: Function, shotUrl: Function }} the request helpers.
+     * @returns {{ post: Function, shotUrl: Function, historyUrl: Function, inboxUrl: Function }} the request helpers.
      */
     function createHostClient() {
       /**
@@ -1592,7 +1920,20 @@ window.__ModuleLoader__.load({
         return `${API_PATH}?history=${encodeURIComponent(item.id)}&t=${version}`
       }
 
-      return { post, shotUrl, historyUrl }
+      /**
+       * The same-origin preview URL for one phone-transfer inbox file, cache-
+       * busted by the moment the phone sent it.
+       *
+       * @param {object} item - inbox entry.
+       * @returns {string} the GET URL.
+       */
+      function inboxUrl(item) {
+        const stamp = typeof item.createdAt === 'string' ? Date.parse(item.createdAt) : Number(item.createdAt)
+        const version = Number.isFinite(stamp) ? stamp : Date.now()
+        return `${API_PATH}?inbox=${encodeURIComponent(item.id)}&t=${version}`
+      }
+
+      return { post, shotUrl, historyUrl, inboxUrl }
     }
 
     /**
@@ -1624,7 +1965,7 @@ window.__ModuleLoader__.load({
      * last answer from the Host or ephemeral view state (active tab, in-flight
      * flags).
      *
-     * @param {{ post: Function, shotUrl: Function }} host - the transport.
+     * @param {{ post: Function, shotUrl: Function, historyUrl: Function, inboxUrl: Function }} host - the transport.
      * @returns {object} the store.
      */
     function createMacToolsStore(host) {
@@ -1642,11 +1983,50 @@ window.__ModuleLoader__.load({
         windows: { status: 'idle', list: [], frontmost: null, error: null },
         system: { status: 'idle', value: null, refreshing: false, error: null },
         calc: { expression: '', status: 'idle', result: null, error: null, history: [] },
+        transfer: {
+          status: 'idle',
+          session: null,
+          inbox: { status: 'idle', items: [], count: 0, error: null },
+          outbox: { status: 'idle', items: [], count: 0, error: null },
+          textDraft: '',
+          sendingText: false,
+          addingFile: false,
+          toast: null,
+          error: null,
+        },
       }
       let hostRequest = null
       let windowsRequest = null
       let systemRequest = null
       let historyRequest = null
+      let transferStatusRequest = null
+      /** Whether a transfer status answer has landed since this store was made. */
+      let transferStatusLoaded = false
+      let transferInboxRequest = null
+      let transferOutboxRequest = null
+      let transferStartRequest = null
+      let transferStopRequest = null
+      /**
+       * Bumped whenever a `transferStart`/`transferStop` answer settles. A
+       * status poll that was sent before that point describes the previous
+       * session, so its answer must not overwrite the fresh one.
+       */
+      let transferStatusGeneration = 0
+      /**
+       * Bumped by every local inbox mutation. A list read that was sent before
+       * the mutation carries the pre-mutation list and must not resurrect it.
+       */
+      let transferInboxGeneration = 0
+      /** The outbox twin of {@link transferInboxGeneration}. */
+      let transferOutboxGeneration = 0
+      /** Whether an inbox answer ever landed, so the skeleton shows only once. */
+      let transferInboxLoaded = false
+      /** The outbox twin of {@link transferInboxLoaded}. */
+      let transferOutboxLoaded = false
+      /** History ids whose one-tap `addHistory` request is still in flight. */
+      const transferHistoryRequests = new Set()
+      /** In-flight one-shot transfer actions, keyed by their action identity. */
+      const transferActionRequests = new Map()
       /** Whether the user changed the hide-while-capturing toggle this session. */
       let hideAppTouched = false
 
@@ -2108,6 +2488,588 @@ window.__ModuleLoader__.load({
         return host.post('historyCopy', { id })
       }
 
+      // --- phone transfer -------------------------------------------------
+
+      /**
+       * Replace part of the transfer slice.
+       *
+       * @param {object} patch - the transfer fields to replace.
+       * @returns {void}
+       */
+      function updateTransfer(patch) {
+        publish({ transfer: Object.assign({}, snapshot.transfer, patch) })
+      }
+
+      /**
+       * Show one toast. `text` is a locale key for success; failures carry the
+       * normalized error so the tab can localize the reason itself.
+       *
+       * @param {object} toast - the toast value.
+       * @returns {void}
+       */
+      function setTransferToast(toast) {
+        updateTransfer({ toast })
+      }
+
+      /**
+       * @param {object} failure - a normalized failure.
+       * @returns {void}
+       */
+      function transferFailureToast(failure) {
+        setTransferToast({ kind: 'error', text: 'transfer.toast.failed', error: failure })
+      }
+
+      /**
+       * Adopt a full status answer. The contract keeps the whole object in
+       * `session` while the session is live and clears it as soon as the Host
+       * says the session is over.
+       *
+       * A poll that lands while a start/stop request is still in flight is
+       * reading the previous state, so the in-flight request stays the truth:
+       * otherwise the first start (which waits for the QR helper) would flash a
+       * "no QR code" session card, and a stop would flip back to "running". A
+       * poll still refreshes the session object mid-stop so the counts stay
+       * current.
+       *
+       * @param {any} value - the `transferStatus`/`transferStart`/`transferStop` answer.
+       * @param {boolean} [authoritative] - a start/stop answer overrides a poll.
+       * @returns {void}
+       */
+      function adoptTransferStatus(value, authoritative) {
+        const next = value !== null && typeof value === 'object' ? value : {}
+        transferStatusLoaded = true
+        if (authoritative !== true && (transferStartRequest !== null || transferStopRequest !== null)) {
+          if (transferStopRequest !== null && next.active === true) {
+            updateTransfer({ session: next })
+          }
+          return
+        }
+        if (next.active === true) {
+          updateTransfer({ status: 'active', session: next, error: null })
+          return
+        }
+        updateTransfer({ status: 'idle', session: null, error: null })
+      }
+
+      /**
+       * Deduplicate one-shot transfer actions so a double click cannot stack
+       * two identical requests.
+       *
+       * @param {string} key - the action identity.
+       * @param {Function} task - the action body.
+       * @returns {Promise<any>} the shared promise.
+       */
+      function transferAction(key, task) {
+        if (transferActionRequests.has(key)) return transferActionRequests.get(key)
+        const promise = Promise.resolve().then(task).then((result) => {
+          transferActionRequests.delete(key)
+          return result
+        }, (error) => {
+          transferActionRequests.delete(key)
+          throw error
+        })
+        transferActionRequests.set(key, promise)
+        return promise
+      }
+
+      /**
+       * Read the transfer session state. Polled by the visible tab every 2 s; a
+       * poll never stacks on an in-flight request and never flashes the loading
+       * skeleton over a session already on screen.
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether the Host answered.
+       */
+      function loadTransferStatus(options) {
+        if (transferStatusRequest !== null) return transferStatusRequest
+        // The skeleton appears only before the first answer: a poll on an idle
+        // session must not re-flash the loading card every two seconds.
+        if (transferStatusLoaded !== true) {
+          updateTransfer({ status: 'loading', error: null })
+        }
+        const generation = transferStatusGeneration
+        const run = host.post('transferStatus', {}, options).then((value) => {
+          // A start/stop settled while this poll was in flight; its answer is
+          // newer than this one (see {@link transferStatusGeneration}).
+          if (generation === transferStatusGeneration) adoptTransferStatus(value)
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          if (failure.code === 'aborted') {
+            if (snapshot.transfer.status === 'loading') {
+              updateTransfer({ status: 'idle', session: null })
+            }
+            return false
+          }
+          if (generation !== transferStatusGeneration) return false
+          // A failed answer is still an answer: keep the error notice steady
+          // instead of flashing the skeleton/clearing it on every poll.
+          transferStatusLoaded = true
+          updateTransfer({ status: 'error', error: failure })
+          return false
+        }).then((result) => {
+          transferStatusRequest = null
+          return result
+        }, (error) => {
+          transferStatusRequest = null
+          throw error
+        })
+        transferStatusRequest = run
+        return run
+      }
+
+      /**
+       * Start a phone-transfer session (the first one may compile the QR
+       * helper, so this can take a while and shows `starting` until it lands).
+       *
+       * @returns {Promise<boolean>} whether the session is active.
+       */
+      function startTransfer() {
+        if (transferStartRequest !== null) return transferStartRequest
+        if (snapshot.transfer.session !== null) return Promise.resolve(true)
+        updateTransfer({ status: 'starting', error: null })
+        const run = host.post('transferStart', {}).then((value) => {
+          adoptTransferStatus(value, true)
+          void refreshTransferInbox()
+          void refreshTransferOutbox()
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          if (failure.code === 'aborted') {
+            updateTransfer({ status: 'idle', session: null })
+            return false
+          }
+          updateTransfer({ status: 'error', error: failure })
+          // The next successful idle status poll (within 2 s) replaces this
+          // notice again, so the toast is what keeps the reason readable.
+          transferFailureToast(failure)
+          return false
+        }).then((result) => {
+          transferStartRequest = null
+          transferStatusGeneration += 1
+          return result
+        }, (error) => {
+          transferStartRequest = null
+          transferStatusGeneration += 1
+          throw error
+        })
+        transferStartRequest = run
+        return run
+      }
+
+      /**
+       * End the current transfer session.
+       *
+       * @returns {Promise<boolean>} whether the session is over.
+       */
+      function stopTransfer() {
+        if (transferStopRequest !== null) return transferStopRequest
+        if (snapshot.transfer.session === null && snapshot.transfer.status !== 'active') return Promise.resolve(false)
+        updateTransfer({ status: 'stopping', error: null })
+        const run = host.post('transferStop', {}).then((value) => {
+          adoptTransferStatus(value, true)
+          void refreshTransferInbox()
+          void refreshTransferOutbox()
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          if (failure.code === 'aborted') {
+            updateTransfer({ status: snapshot.transfer.session === null ? 'idle' : 'active' })
+            return false
+          }
+          updateTransfer({
+            status: snapshot.transfer.session === null ? 'idle' : 'active',
+            error: failure,
+          })
+          transferFailureToast(failure)
+          return false
+        }).then((result) => {
+          transferStopRequest = null
+          transferStatusGeneration += 1
+          return result
+        }, (error) => {
+          transferStopRequest = null
+          transferStatusGeneration += 1
+          throw error
+        })
+        transferStopRequest = run
+        return run
+      }
+
+      /**
+       * Read the inbox (what the phone sent to this Mac).
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether the list is current.
+       */
+      function refreshTransferInbox(options) {
+        if (transferInboxRequest !== null) return transferInboxRequest
+        const current = snapshot.transfer.inbox
+        // Only the first read shows the skeleton: a poll (or a retry after an
+        // error) keeps the previous card on screen instead of flashing it.
+        const firstRead = current.items.length === 0 && transferInboxLoaded !== true
+        const keepError = firstRead !== true && current.error !== null && current.error !== undefined
+        const generation = transferInboxGeneration
+        updateTransfer({
+          inbox: Object.assign({}, current, {
+            status: firstRead ? 'loading' : (keepError ? 'error' : 'ready'),
+            error: keepError ? current.error : null,
+          }),
+        })
+        const run = host.post('transferInbox', { action: 'refresh' }, options).then((value) => {
+          if (generation !== transferInboxGeneration) {
+            // A delete/clear landed while this read was in flight, so the
+            // answer predates it and must not resurrect the removed rows.
+            const state = snapshot.transfer.inbox
+            updateTransfer({ inbox: Object.assign({}, state, { status: 'ready', error: null }) })
+            return false
+          }
+          const record = value !== null && typeof value === 'object' ? value : {}
+          const items = Array.isArray(record.items) ? record.items : []
+          const count = Number.isFinite(record.count) ? record.count : items.length
+          transferInboxLoaded = true
+          updateTransfer({ inbox: { status: 'ready', items, count, error: null } })
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          const state = snapshot.transfer.inbox
+          if (failure.code === 'aborted') {
+            updateTransfer({ inbox: Object.assign({}, state, { status: state.items.length === 0 ? 'idle' : 'ready' }) })
+            return false
+          }
+          transferInboxLoaded = true
+          updateTransfer({
+            inbox: Object.assign({}, state, {
+              status: state.items.length === 0 ? 'error' : 'ready',
+              error: failure,
+            }),
+          })
+          return false
+        }).then((result) => {
+          transferInboxRequest = null
+          return result
+        }, (error) => {
+          transferInboxRequest = null
+          throw error
+        })
+        transferInboxRequest = run
+        return run
+      }
+
+      /**
+       * Read the outbox (what this Mac is offering to the phone).
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether the list is current.
+       */
+      function refreshTransferOutbox(options) {
+        if (transferOutboxRequest !== null) return transferOutboxRequest
+        const current = snapshot.transfer.outbox
+        // Same rule as the inbox: one skeleton on the first read, then the
+        // previous card (including a live error) stays until the answer lands.
+        const firstRead = current.items.length === 0 && transferOutboxLoaded !== true
+        const keepError = firstRead !== true && current.error !== null && current.error !== undefined
+        const generation = transferOutboxGeneration
+        updateTransfer({
+          outbox: Object.assign({}, current, {
+            status: firstRead ? 'loading' : (keepError ? 'error' : 'ready'),
+            error: keepError ? current.error : null,
+          }),
+        })
+        const run = host.post('transferOutbox', { action: 'refresh' }, options).then((value) => {
+          if (generation !== transferOutboxGeneration) {
+            // An add/remove landed while this read was in flight, so the answer
+            // predates it and would hide a just-sent item or revive a removed one.
+            const state = snapshot.transfer.outbox
+            updateTransfer({ outbox: Object.assign({}, state, { status: 'ready', error: null }) })
+            return false
+          }
+          const record = value !== null && typeof value === 'object' ? value : {}
+          const items = Array.isArray(record.items) ? record.items : []
+          const count = Number.isFinite(record.count) ? record.count : items.length
+          transferOutboxLoaded = true
+          updateTransfer({ outbox: { status: 'ready', items, count, error: null } })
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          const state = snapshot.transfer.outbox
+          if (failure.code === 'aborted') {
+            updateTransfer({ outbox: Object.assign({}, state, { status: state.items.length === 0 ? 'idle' : 'ready' }) })
+            return false
+          }
+          transferOutboxLoaded = true
+          updateTransfer({
+            outbox: Object.assign({}, state, {
+              status: state.items.length === 0 ? 'error' : 'ready',
+              error: failure,
+            }),
+          })
+          return false
+        }).then((result) => {
+          transferOutboxRequest = null
+          return result
+        }, (error) => {
+          transferOutboxRequest = null
+          throw error
+        })
+        transferOutboxRequest = run
+        return run
+      }
+
+      /**
+       * Delete one inbox entry (and its file, for file entries).
+       *
+       * @param {string} id - inbox entry id.
+       * @returns {Promise<boolean>} whether it was deleted.
+       */
+      function deleteTransferInboxItem(id) {
+        return transferAction(`inbox:delete:${id}`, async () => {
+          try {
+            await host.post('transferInbox', { action: 'delete', id })
+            transferInboxGeneration += 1
+            const state = snapshot.transfer.inbox
+            const items = state.items.filter((item) => item.id !== id)
+            updateTransfer({
+              inbox: Object.assign({}, state, { items, count: items.length, error: null }),
+              toast: { kind: 'ok', text: 'transfer.toast.deleted' },
+            })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /**
+       * Remove every inbox entry.
+       *
+       * @returns {Promise<boolean>} whether the inbox was cleared.
+       */
+      function clearTransferInbox() {
+        return transferAction('inbox:clear', async () => {
+          try {
+            await host.post('transferInbox', { action: 'clear' })
+            transferInboxGeneration += 1
+            updateTransfer({
+              inbox: { status: 'ready', items: [], count: 0, error: null },
+              toast: { kind: 'ok', text: 'transfer.toast.cleared' },
+            })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /**
+       * Copy one inbox text entry to the macOS clipboard.
+       *
+       * @param {string} id - inbox entry id.
+       * @returns {Promise<boolean>} whether it was copied.
+       */
+      function copyTransferText(id) {
+        return transferAction(`inbox:copy:${id}`, async () => {
+          try {
+            await host.post('transferInbox', { action: 'copyText', id })
+            setTransferToast({ kind: 'ok', text: 'transfer.toast.copied' })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /**
+       * Ask Finder to reveal the file behind one inbox entry.
+       *
+       * @param {string} id - inbox entry id.
+       * @returns {Promise<boolean>} whether Finder was asked.
+       */
+      function revealTransferInboxItem(id) {
+        return transferAction(`inbox:reveal:${id}`, async () => {
+          try {
+            await host.post('transferInbox', { action: 'reveal', id })
+            setTransferToast({ kind: 'ok', text: 'transfer.toast.revealed' })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /**
+       * @param {string} text - the new outbox text draft.
+       * @returns {void}
+       */
+      function setTransferTextDraft(text) {
+        updateTransfer({ textDraft: String(text) })
+      }
+
+      /**
+       * Prepend freshly created outbox entries (the list is newest first).
+       *
+       * @param {object[]} items - the new entries.
+       * @returns {object[]} the merged list.
+       */
+      function prependTransferOutboxItems(items) {
+        transferOutboxGeneration += 1
+        const state = snapshot.transfer.outbox
+        const merged = items.concat(state.items)
+        updateTransfer({
+          outbox: Object.assign({}, state, { status: 'ready', items: merged, count: merged.length, error: null }),
+        })
+        return merged
+      }
+
+      /**
+       * Send the current text draft to the phone.
+       *
+       * @returns {Promise<boolean>} whether it was queued.
+       */
+      async function sendTransferText() {
+        if (snapshot.transfer.sendingText === true) return false
+        const draft = snapshot.transfer.textDraft
+        const text = draft.trim()
+        if (text === '') return false
+        updateTransfer({ sendingText: true })
+        try {
+          const value = await host.post('transferOutbox', { action: 'addText', text })
+          const item = value !== null && typeof value === 'object' && value.item !== null && typeof value.item === 'object' ? value.item : null
+          // Only clear the box when it still holds what was just sent: text
+          // typed while the request was in flight must survive.
+          const pendingDraft = snapshot.transfer.textDraft
+          updateTransfer({ sendingText: false, textDraft: pendingDraft === draft ? '' : pendingDraft })
+          if (item !== null) prependTransferOutboxItems([item])
+          setTransferToast({ kind: 'ok', text: 'transfer.toast.sent' })
+          return true
+        } catch (error) {
+          updateTransfer({ sendingText: false })
+          transferFailureToast(describeFailure(error))
+          return false
+        }
+      }
+
+      /**
+       * Open the native file picker and queue every chosen file. Cancelling the
+       * picker is a normal outcome and stays silent.
+       *
+       * @returns {Promise<boolean>} whether any file was queued.
+       */
+      async function sendTransferFile() {
+        if (snapshot.transfer.addingFile === true) return false
+        updateTransfer({ addingFile: true })
+        try {
+          const value = await host.post('transferOutbox', { action: 'addFile' })
+          const record = value !== null && typeof value === 'object' ? value : {}
+          const items = Array.isArray(record.items) ? record.items : []
+          updateTransfer({ addingFile: false })
+          if (record.cancelled === true || items.length === 0) return false
+          prependTransferOutboxItems(items)
+          setTransferToast(items.length === 1
+            ? { kind: 'ok', text: 'transfer.toast.fileAdded' }
+            : { kind: 'ok', text: 'transfer.toast.filesAdded', params: { count: items.length } })
+          return true
+        } catch (error) {
+          updateTransfer({ addingFile: false })
+          transferFailureToast(describeFailure(error))
+          return false
+        }
+      }
+
+      /**
+       * Queue one recent screenshot for the phone.
+       *
+       * @param {string} historyId - history entry id.
+       * @returns {Promise<boolean>} whether it was queued.
+       */
+      function sendHistoryToPhone(historyId) {
+        const id = String(historyId)
+        if (transferHistoryRequests.has(id)) return Promise.resolve(false)
+        const promise = Promise.resolve().then(async () => {
+          try {
+            const value = await host.post('transferOutbox', { action: 'addHistory', id })
+            const item = value !== null && typeof value === 'object' && value.item !== null && typeof value.item === 'object' ? value.item : null
+            if (item !== null) prependTransferOutboxItems([item])
+            setTransferToast({ kind: 'ok', text: 'transfer.toast.sent' })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          } finally {
+            transferHistoryRequests.delete(id)
+          }
+        })
+        transferHistoryRequests.add(id)
+        return promise
+      }
+
+      /**
+       * Drop one outbox entry (the file itself stays on disk).
+       *
+       * @param {string} id - outbox entry id.
+       * @returns {Promise<boolean>} whether it was removed.
+       */
+      function removeTransferOutboxItem(id) {
+        return transferAction(`outbox:remove:${id}`, async () => {
+          try {
+            await host.post('transferOutbox', { action: 'remove', id })
+            transferOutboxGeneration += 1
+            const state = snapshot.transfer.outbox
+            const items = state.items.filter((item) => item.id !== id)
+            updateTransfer({
+              outbox: Object.assign({}, state, { items, count: items.length, error: null }),
+              toast: { kind: 'ok', text: 'transfer.toast.removed' },
+            })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /**
+       * Remove every outbox entry.
+       *
+       * @returns {Promise<boolean>} whether the outbox was cleared.
+       */
+      function clearTransferOutbox() {
+        return transferAction('outbox:clear', async () => {
+          try {
+            await host.post('transferOutbox', { action: 'clear' })
+            transferOutboxGeneration += 1
+            updateTransfer({
+              outbox: { status: 'ready', items: [], count: 0, error: null },
+              toast: { kind: 'ok', text: 'transfer.toast.cleared' },
+            })
+            return true
+          } catch (error) {
+            transferFailureToast(describeFailure(error))
+            return false
+          }
+        })
+      }
+
+      /** Hide the current toast (its three-second timer calls this). */
+      function dismissTransferToast() {
+        if (snapshot.transfer.toast === null) return
+        updateTransfer({ toast: null })
+      }
+
+      /**
+       * The same-origin preview URL for one inbox image.
+       *
+       * @param {object} item - inbox entry.
+       * @returns {string} the GET URL.
+       */
+      function transferInboxImageUrl(item) {
+        return host.inboxUrl(item)
+      }
+
       /**
        * Ask whether a pinned window requested its image in the editor, and adopt
        * it when it did. Polled while the page is visible.
@@ -2267,6 +3229,23 @@ window.__ModuleLoader__.load({
         copyHistory,
         pollPendingEditor,
         historyImageUrl,
+        loadTransferStatus,
+        startTransfer,
+        stopTransfer,
+        refreshTransferInbox,
+        refreshTransferOutbox,
+        deleteTransferInboxItem,
+        clearTransferInbox,
+        copyTransferText,
+        revealTransferInboxItem,
+        setTransferTextDraft,
+        sendTransferText,
+        sendTransferFile,
+        sendHistoryToPhone,
+        removeTransferOutboxItem,
+        clearTransferOutbox,
+        dismissTransferToast,
+        transferInboxImageUrl,
       }
     }
 
@@ -3861,6 +4840,612 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Phone transfer tab
+    // ---------------------------------------------------------------------
+
+    /**
+     * The session countdown. It owns its own one-second clock so the tick only
+     * re-renders this line instead of the whole tab with its two item lists.
+     *
+     * @param {{ t: Function, expiresAt: string|null, active: boolean }} props - the translator, the session expiry and whether the tab is visible.
+     * @returns {object|null} the element, or null when the expiry is unknown.
+     */
+    function TransferCountdown({ t, expiresAt, active }) {
+      const [now, setNow] = React.useState(() => Date.now())
+      React.useEffect(() => {
+        if (active !== true) return undefined
+        setNow(Date.now())
+        const timer = setInterval(() => setNow(Date.now()), TRANSFER_CLOCK_POLL_MS)
+        return () => clearInterval(timer)
+      }, [active, expiresAt])
+      const text = transferCountdownText(t, expiresAt, now)
+      if (text === '') return null
+      return h('p', { className: 'dshMacToolsTransferCardMeta', role: 'timer' }, text)
+    }
+
+    /**
+     * The phone-transfer tab.
+     *
+     * It starts and stops the Host's temporary LAN server, shows its QR code
+     * and address, and mirrors the two queues: what the phone sent to this Mac
+     * (inbox) and what this Mac offers to the phone (outbox, fed by text, the
+     * native file picker, or one of the six most recent screenshots).
+     *
+     * Everything network-bound is polled only while this tab is the visible
+     * one — the session state every two seconds, the two lists every four — and
+     * the countdown re-renders locally every second. Switching tabs or closing
+     * the panel clears every timer and aborts the requests the tab owns, so the
+     * plugin never polls in the background.
+     *
+     * @param {object} props - tab props.
+     * @returns {object} the element.
+     */
+    function TransferTab({ store, snapshot, t, active }) {
+      const transfer = snapshot.transfer
+      const session = transfer.session
+      const inbox = transfer.inbox
+      const outbox = transfer.outbox
+      const sessionUrl = session !== null && typeof session.url === 'string' ? session.url : ''
+      const [urlCopied, setUrlCopied] = React.useState(false)
+      const [urlCopyError, setUrlCopyError] = React.useState('')
+      const [confirmInboxClear, setConfirmInboxClear] = React.useState(false)
+      const [confirmOutboxClear, setConfirmOutboxClear] = React.useState(false)
+
+      React.useEffect(() => {
+        if (active !== true) return undefined
+        const controller = typeof AbortController === 'function' ? new AbortController() : null
+        const signal = controller === null ? undefined : controller.signal
+        void store.loadTransferStatus({ signal })
+        void store.refreshTransferInbox({ signal })
+        void store.refreshTransferOutbox({ signal })
+        // The recent-screenshot strip is seeded from the shared history store;
+        // it is refreshed on entry rather than polled, per the contract.
+        if (snapshot.history.items.length === 0) void store.loadHistory({ signal })
+        const statusTimer = setInterval(() => {
+          void store.loadTransferStatus()
+        }, TRANSFER_STATUS_POLL_MS)
+        const listTimer = setInterval(() => {
+          void store.refreshTransferInbox()
+          void store.refreshTransferOutbox()
+        }, TRANSFER_LIST_POLL_MS)
+        return () => {
+          clearInterval(statusTimer)
+          clearInterval(listTimer)
+          if (controller !== null) controller.abort()
+        }
+      }, [active, store])
+
+      // A toast is transient: it clears itself after three seconds.
+      const toast = transfer.toast
+      React.useEffect(() => {
+        if (toast === null || toast === undefined) return undefined
+        const timer = setTimeout(() => store.dismissTransferToast(), TRANSFER_TOAST_MS)
+        return () => clearTimeout(timer)
+      }, [toast, store])
+
+      // The copied-link label falls back to "copy" a moment later.
+      React.useEffect(() => {
+        if (urlCopied !== true) return undefined
+        const timer = setTimeout(() => setUrlCopied(false), TRANSFER_TOAST_MS)
+        return () => clearTimeout(timer)
+      }, [urlCopied])
+
+      // A new session means a new link: never carry a copy result (ok or
+      // failed) over from the previous one.
+      React.useEffect(() => {
+        setUrlCopied(false)
+        setUrlCopyError('')
+      }, [sessionUrl])
+
+      // Disarm "clear" as soon as the list is empty, so a stale armed button
+      // cannot make the next item clearable with a single click.
+      const inboxItemCount = inbox.items.length
+      React.useEffect(() => {
+        if (inboxItemCount === 0) setConfirmInboxClear(false)
+      }, [inboxItemCount])
+      const outboxItemCount = outbox.items.length
+      React.useEffect(() => {
+        if (outboxItemCount === 0) setConfirmOutboxClear(false)
+      }, [outboxItemCount])
+
+      const copyTransferUrl = () => {
+        const url = sessionUrl
+        if (url === '') return
+        const clipboard = typeof navigator !== 'undefined'
+          && navigator !== null
+          && navigator.clipboard !== null
+          && navigator.clipboard !== undefined
+          && typeof navigator.clipboard === 'object'
+          ? navigator.clipboard
+          : null
+        if (clipboard === null || typeof clipboard.writeText !== 'function') {
+          setUrlCopyError(t('transfer.copyFailed', { message: t('transfer.clipboardUnavailable') }))
+          return
+        }
+        setUrlCopyError('')
+        Promise.resolve(clipboard.writeText(url)).then(() => {
+          setUrlCopied(true)
+        }, (error) => {
+          setUrlCopied(false)
+          setUrlCopyError(t('transfer.copyFailed', { message: error instanceof Error ? error.message : String(error) }))
+        })
+      }
+
+      const inboxCount = Number.isFinite(inbox.count) ? inbox.count : inbox.items.length
+      const outboxCount = Number.isFinite(outbox.count) ? outbox.count : outbox.items.length
+
+      const transferError = transfer.error === null || transfer.error === undefined
+        ? null
+        : h('div', { key: 'transfer-error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+          h('p', { key: 'text' }, transferErrorText(t, transfer.error)),
+          session !== null
+            ? h('button', {
+              key: 'retry',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.loadTransferStatus() },
+            }, t('common.retry'))
+            : null,
+        ])
+
+      let card
+      if (session !== null) {
+        // --- live session: QR, URLs, countdown, stop -----------------------
+        const qrImage = typeof session.qrPngBase64 === 'string' && session.qrPngBase64 !== ''
+          ? h('img', {
+            key: 'qr',
+            className: 'dshMacToolsTransferQrImage',
+            src: `${TRANSFER_QR_PREFIX}${session.qrPngBase64}`,
+            alt: t('transfer.qrAlt'),
+            draggable: false,
+          })
+          : h('div', { key: 'qr', className: 'dshMacToolsTransferQrFallback' }, [
+            h('span', { key: 'icon', 'aria-hidden': true }, glyph('qr', 26)),
+            h('span', { key: 'text' }, t('transfer.qrFallback')),
+          ])
+        const qrError = typeof session.qrError === 'string' && session.qrError !== ''
+          ? h('p', { key: 'qr-error', className: 'dshMacToolsTransferHint dshMacToolsTransferHintError', role: 'alert' }, t('transfer.qrError', { message: session.qrError }))
+          : null
+
+        const url = sessionUrl
+        const urlRow = url === '' ? null : h('div', { key: 'url', className: 'dshMacToolsTransferUrlRow' }, [
+          h('span', { key: 'label', className: 'dshMacToolsTransferHint' }, t('transfer.urlLabel')),
+          h('span', { key: 'text', className: 'dshMacToolsTransferUrl' }, url),
+          h('button', {
+            key: 'copy',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+            onClick: copyTransferUrl,
+          }, [
+            glyph('copy', 13, 'icon'),
+            h('span', { key: 'label' }, urlCopied ? t('transfer.urlCopied') : t('transfer.copyUrl')),
+          ]),
+        ])
+        const copyError = urlCopyError === ''
+          ? null
+          : h('p', { key: 'copy-error', className: 'dshMacToolsTransferHint dshMacToolsTransferHintError', role: 'alert' }, urlCopyError)
+
+        const urls = Array.isArray(session.urls)
+          ? session.urls.filter((entry) => typeof entry === 'string' && entry !== '')
+          : []
+        const extraUrls = urls.length <= 1 ? null : h('div', { key: 'urls' }, [
+          h('p', { key: 'title', className: 'dshMacToolsTransferHint' }, t('transfer.urlsTitle')),
+          h('ul', { key: 'list', className: 'dshMacToolsTransferUrls' }, urls.map((entry, index) => h(
+            'li',
+            { key: `url-${index}`, className: 'dshMacToolsTransferUrlItem' },
+            entry,
+          ))),
+        ])
+
+        const directory = typeof session.directory === 'string' ? session.directory : ''
+        const sessionMeta = h('p', { key: 'meta', className: 'dshMacToolsTransferHint' }, [
+          directory === '' ? null : t('transfer.directory', { directory }),
+          directory === '' ? null : ' · ',
+          t('transfer.sessionMinutes', { minutes: Number.isFinite(session.sessionMinutes) ? session.sessionMinutes : 0 }),
+          ' · ',
+          t('transfer.maxFile', { megabytes: Number.isFinite(session.maxFileMB) ? Math.round(session.maxFileMB) : 0 }),
+        ])
+
+        const warnings = Array.isArray(session.warnings)
+          ? session.warnings.filter((entry) => typeof entry === 'string' && entry !== '')
+          : []
+        const warningList = warnings.length === 0
+          ? null
+          : h('ul', { key: 'warnings', className: 'dshMacToolsTransferWarnings' }, warnings.map((entry, index) => h(
+            'li',
+            { key: `warning-${index}`, className: 'dshMacToolsTransferWarning' },
+            [
+              h('span', { key: 'icon', className: 'dshMacToolsTransferWarningIcon', 'aria-hidden': true }, glyph('alert', 13)),
+              h('span', { key: 'text' }, entry),
+            ],
+          )))
+
+        const stopping = transfer.status === 'stopping'
+
+        card = h('section', { key: 'card', className: 'dshMacToolsTransferCard', 'aria-label': t('transfer.title') }, [
+          h('div', { key: 'head', className: 'dshMacToolsTransferCardHead' }, [
+            h('h2', { key: 'title', className: 'dshMacToolsTransferCardTitle' }, t('transfer.title')),
+            h('span', { key: 'status', className: 'dshMacToolsStatusPill dshMacToolsStatusReady' }, [
+              h('span', { key: 'dot', className: 'dshMacToolsStatusDot', 'aria-hidden': true }),
+              h('span', { key: 'text', className: 'dshMacToolsStatusText' }, t('transfer.active')),
+            ]),
+            h(TransferCountdown, { key: 'countdown', t, expiresAt: session.expiresAt, active }),
+            h('button', {
+              key: 'stop',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+              disabled: stopping,
+              onClick: () => { void store.stopTransfer() },
+            }, stopping
+              ? [h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }), t('transfer.stopping')]
+              : t('transfer.stop')),
+          ]),
+          transferError,
+          h('div', { key: 'body', className: 'dshMacToolsTransferQrRow' }, [
+            h('div', { key: 'qr-box', className: 'dshMacToolsTransferQrBox' }, [qrImage, qrError]),
+            h('div', { key: 'session', className: 'dshMacToolsTransferSession' }, [
+              urlRow,
+              copyError,
+              extraUrls,
+              sessionMeta,
+              warningList,
+            ]),
+          ]),
+          h('p', { key: 'hint', className: 'dshMacToolsTransferHint' }, t('transfer.wifiHint')),
+        ])
+      } else {
+        // --- idle/loading/starting/error: the start card -------------------
+        const hostReady = snapshot.host.kind === 'ready'
+        const hostValue = snapshot.host.value
+        const capabilities = hostValue !== null && typeof hostValue === 'object' && hostValue.capabilities !== null && typeof hostValue.capabilities === 'object'
+          ? hostValue.capabilities
+          : null
+        const supported = capabilities === null || capabilities.transfer !== false
+        const starting = transfer.status === 'starting'
+        const loading = transfer.status === 'loading'
+        let actionRow
+        if (starting === true || loading === true) {
+          actionRow = h('p', { key: 'busy', className: 'dshMacToolsTransferLoading', role: 'status' }, [
+            h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }),
+            t(starting === true ? 'transfer.starting' : 'transfer.loading'),
+          ])
+        } else {
+          actionRow = h('div', { key: 'row', className: 'dshMacToolsTransferStartRow' }, [
+            h('button', {
+              key: 'start',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonPrimary',
+              disabled: hostReady !== true || supported !== true,
+              onClick: () => { void store.startTransfer() },
+            }, [
+              glyph('qr', 15, 'icon'),
+              h('span', { key: 'label' }, t('transfer.start')),
+            ]),
+            supported === true
+              ? null
+              : h('span', { key: 'unsupported', className: 'dshMacToolsTransferHint dshMacToolsTransferHintError' }, t('transfer.error.unsupported')),
+          ])
+        }
+        card = h('section', { key: 'card', className: 'dshMacToolsTransferCard', 'aria-label': t('transfer.title') }, [
+          h('div', { key: 'head', className: 'dshMacToolsTransferCardHead' }, [
+            h('h2', { key: 'title', className: 'dshMacToolsTransferCardTitle' }, t('transfer.title')),
+          ]),
+          h('p', { key: 'subtitle', className: 'dshMacToolsTransferIntroText' }, t('transfer.subtitle')),
+          transferError,
+          actionRow,
+        ])
+      }
+
+      // --- inbox column ----------------------------------------------------
+      const inboxItemNodes = inbox.items.map((item, index) => {
+        const kind = typeof item.kind === 'string' ? item.kind : 'file'
+        const name = typeof item.name === 'string' && item.name !== '' ? item.name : transferKindLabel(t, kind)
+        const previewable = item.previewable === true && kind === 'file'
+        const text = typeof item.text === 'string' ? item.text : ''
+        const sizeText = transferSizeText(item.size)
+        const timeText = formatDateTime(item.createdAt)
+        // Text rows lead with the preview and still name the saved .txt file;
+        // file rows lead with the name and keep size/time in the meta line.
+        const meta = kind === 'text' && text !== ''
+          ? `${name} · ${sizeText} · ${timeText}`
+          : `${sizeText} · ${timeText}`
+        const thumb = previewable === false
+          ? null
+          : h('div', { key: 'thumb', className: 'dshMacToolsTransferThumb' }, h('img', {
+            src: store.transferInboxImageUrl(item),
+            alt: t('transfer.inbox.previewAlt'),
+            loading: 'lazy',
+            draggable: false,
+          }))
+        const titleNode = kind === 'text' && text !== ''
+          ? h('p', { key: 'preview', className: 'dshMacToolsTransferRowPreview' }, transferPreviewText(text))
+          : h('span', { key: 'name', className: 'dshMacToolsTransferRowName' }, name)
+        const actions = []
+        if (kind === 'text') {
+          actions.push(h('button', {
+            key: 'copy',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+            onClick: () => { void store.copyTransferText(item.id) },
+          }, t('transfer.inbox.copy')))
+        }
+        if (kind === 'file') {
+          actions.push(h('button', {
+            key: 'reveal',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => { void store.revealTransferInboxItem(item.id) },
+          }, t('transfer.inbox.reveal')))
+        }
+        actions.push(h('button', {
+          key: 'delete',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+          onClick: () => { void store.deleteTransferInboxItem(item.id) },
+        }, t('transfer.inbox.delete')))
+        return h('li', { key: typeof item.id === 'string' ? item.id : `inbox-${index}`, className: 'dshMacToolsTransferRow' }, [
+          h('div', { key: 'main', className: 'dshMacToolsTransferRowMain' }, [
+            thumb,
+            h('div', { key: 'text', className: 'dshMacToolsTransferRowText' }, [
+              titleNode,
+              h('span', { key: 'meta', className: 'dshMacToolsTransferRowMeta' }, meta),
+            ]),
+            h('span', { key: 'kind', className: 'dshMacToolsTransferBadge' }, transferKindLabel(t, kind)),
+          ]),
+          h('div', { key: 'actions', className: 'dshMacToolsTransferRowActions' }, actions),
+        ])
+      })
+
+      let inboxBody
+      if (inbox.items.length === 0) {
+        if (inbox.status === 'loading') {
+          inboxBody = h('div', { key: 'loading', className: 'dshMacToolsLoading', 'aria-busy': 'true' }, [
+            h('p', { key: 'text', className: 'dshMacToolsTransferLoading' }, [
+              h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }),
+              t('transfer.inbox.loading'),
+            ]),
+            h('div', { key: 'one', className: 'dshMacToolsSkeleton dshMacToolsTransferSkeleton' }),
+            h('div', { key: 'two', className: 'dshMacToolsSkeleton dshMacToolsTransferSkeleton' }),
+          ])
+        } else if (inbox.status === 'error' && inbox.error !== null) {
+          inboxBody = h('div', { key: 'error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+            h('p', { key: 'text' }, transferErrorText(t, inbox.error)),
+            h('button', {
+              key: 'retry',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.refreshTransferInbox() },
+            }, t('common.retry')),
+          ])
+        } else {
+          inboxBody = h('p', { key: 'empty', className: 'dshMacToolsTransferEmpty' }, t('transfer.inbox.empty'))
+        }
+      } else {
+        inboxBody = [
+          inbox.error === null || inbox.error === undefined
+            ? null
+            : h('p', { key: 'stale', className: 'dshMacToolsTransferHint dshMacToolsTransferHintError', role: 'alert' }, t('transfer.inbox.error', { message: inbox.error.message })),
+          h('ul', { key: 'list', className: 'dshMacToolsTransferList' }, inboxItemNodes),
+        ]
+      }
+
+      const inboxPanel = h('section', { key: 'inbox', className: 'dshMacToolsTransferColumn', 'aria-label': t('transfer.inbox.title') }, [
+        h('div', { key: 'head', className: 'dshMacToolsTransferColHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsTransferColTitle' }, t('transfer.inbox.title')),
+          h('span', { key: 'count', className: 'dshMacToolsTransferColCount' }, t('transfer.inbox.count', { count: inboxCount })),
+          h('div', { key: 'actions', className: 'dshMacToolsTransferColActions' }, [
+            h('button', {
+              key: 'refresh',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.refreshTransferInbox() },
+            }, t('transfer.refresh')),
+            inboxCount > 0
+              ? h('button', {
+                key: 'clear',
+                type: 'button',
+                className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+                onClick: () => {
+                  if (confirmInboxClear === true) {
+                    setConfirmInboxClear(false)
+                    void store.clearTransferInbox()
+                  } else {
+                    setConfirmInboxClear(true)
+                  }
+                },
+              }, confirmInboxClear === true ? t('transfer.inbox.clearConfirm') : t('transfer.inbox.clear'))
+              : null,
+          ]),
+        ]),
+        inboxBody,
+      ])
+
+      // --- outbox column ---------------------------------------------------
+      const recentItems = Array.isArray(snapshot.history.items)
+        ? snapshot.history.items.slice(0, TRANSFER_RECENT_SCREENSHOTS)
+        : []
+      const recent = h('div', { key: 'recent', className: 'dshMacToolsTransferRecent' }, [
+        h('p', { key: 'title', className: 'dshMacToolsTransferRecentTitle' }, t('transfer.outbox.recent')),
+        recentItems.length === 0
+          ? h('p', { key: 'empty', className: 'dshMacToolsTransferHint' }, t('transfer.outbox.recentEmpty'))
+          : h('div', { key: 'grid', className: 'dshMacToolsTransferRecentGrid' }, recentItems.map((item, index) => h('button', {
+            key: typeof item.id === 'string' ? item.id : `history-${index}`,
+            type: 'button',
+            className: 'dshMacToolsTransferRecentButton',
+            title: t('transfer.outbox.sendHistory'),
+            'aria-label': `${t('transfer.outbox.sendHistory')} ${formatDateTime(item.at)}`,
+            onClick: () => { void store.sendHistoryToPhone(item.id) },
+          }, h('img', {
+            src: store.historyImageUrl(item),
+            alt: '',
+            loading: 'lazy',
+            draggable: false,
+          })))),
+      ])
+
+      const outboxItemNodes = outbox.items.map((item, index) => {
+        const kind = typeof item.kind === 'string' ? item.kind : 'file'
+        const name = typeof item.name === 'string' && item.name !== '' ? item.name : transferKindLabel(t, kind)
+        const text = typeof item.text === 'string' ? item.text : ''
+        const sizeText = transferSizeText(item.size)
+        const timeText = formatDateTime(item.createdAt)
+        const meta = kind === 'text' && text !== ''
+          ? `${name} · ${sizeText} · ${timeText}`
+          : `${sizeText} · ${timeText}`
+        const titleNode = kind === 'text' && text !== ''
+          ? h('p', { key: 'preview', className: 'dshMacToolsTransferRowPreview' }, transferPreviewText(text))
+          : h('span', { key: 'name', className: 'dshMacToolsTransferRowName' }, name)
+        return h('li', { key: typeof item.id === 'string' ? item.id : `outbox-${index}`, className: 'dshMacToolsTransferRow' }, [
+          h('div', { key: 'main', className: 'dshMacToolsTransferRowMain' }, [
+            h('div', { key: 'text', className: 'dshMacToolsTransferRowText' }, [
+              titleNode,
+              h('span', { key: 'meta', className: 'dshMacToolsTransferRowMeta' }, meta),
+            ]),
+            h('span', { key: 'kind', className: 'dshMacToolsTransferBadge' }, transferKindLabel(t, kind)),
+          ]),
+          h('div', { key: 'actions', className: 'dshMacToolsTransferRowActions' }, [
+            h('button', {
+              key: 'remove',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+              onClick: () => { void store.removeTransferOutboxItem(item.id) },
+            }, t('transfer.outbox.remove')),
+          ]),
+        ])
+      })
+
+      let outboxBody
+      if (outbox.items.length === 0) {
+        if (outbox.status === 'loading') {
+          outboxBody = h('div', { key: 'loading', className: 'dshMacToolsLoading', 'aria-busy': 'true' }, [
+            h('p', { key: 'text', className: 'dshMacToolsTransferLoading' }, [
+              h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }),
+              t('transfer.outbox.loading'),
+            ]),
+            h('div', { key: 'one', className: 'dshMacToolsSkeleton dshMacToolsTransferSkeleton' }),
+            h('div', { key: 'two', className: 'dshMacToolsSkeleton dshMacToolsTransferSkeleton' }),
+          ])
+        } else if (outbox.status === 'error' && outbox.error !== null) {
+          outboxBody = h('div', { key: 'error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+            h('p', { key: 'text' }, transferErrorText(t, outbox.error)),
+            h('button', {
+              key: 'retry',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.refreshTransferOutbox() },
+            }, t('common.retry')),
+          ])
+        } else {
+          outboxBody = h('p', { key: 'empty', className: 'dshMacToolsTransferEmpty' }, t('transfer.outbox.empty'))
+        }
+      } else {
+        outboxBody = [
+          outbox.error === null || outbox.error === undefined
+            ? null
+            : h('p', { key: 'stale', className: 'dshMacToolsTransferHint dshMacToolsTransferHintError', role: 'alert' }, t('transfer.outbox.error', { message: outbox.error.message })),
+          h('ul', { key: 'list', className: 'dshMacToolsTransferList' }, outboxItemNodes),
+        ]
+      }
+
+      const sendingText = transfer.sendingText === true
+      const addingFile = transfer.addingFile === true
+      const draftEmpty = transfer.textDraft.trim() === ''
+      const compose = h('div', { key: 'compose', className: 'dshMacToolsTransferCompose' }, [
+        h('textarea', {
+          key: 'draft',
+          className: 'dshMacToolsTransferTextarea',
+          rows: 2,
+          value: transfer.textDraft,
+          placeholder: t('transfer.outbox.textPlaceholder'),
+          'aria-label': t('transfer.outbox.textPlaceholder'),
+          onChange: (event) => store.setTransferTextDraft(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && (event.metaKey === true || event.ctrlKey === true)) {
+              event.preventDefault()
+              void store.sendTransferText()
+            }
+          },
+        }),
+        h('div', { key: 'row', className: 'dshMacToolsTransferComposeRow' }, [
+          h('button', {
+            key: 'send',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonPrimary',
+            disabled: sendingText === true || draftEmpty === true,
+            onClick: () => { void store.sendTransferText() },
+          }, sendingText === true
+            ? [h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }), t('transfer.outbox.sending')]
+            : [glyph('arrow', 13, 'icon'), h('span', { key: 'label' }, t('transfer.outbox.send'))]),
+          h('button', {
+            key: 'file',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+            disabled: addingFile === true,
+            onClick: () => { void store.sendTransferFile() },
+          }, addingFile === true
+            ? [h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }), t('transfer.outbox.choosingFile')]
+            : [glyph('save', 13, 'icon'), h('span', { key: 'label' }, t('transfer.outbox.chooseFile'))]),
+        ]),
+        recent,
+      ])
+
+      const outboxPanel = h('section', { key: 'outbox', className: 'dshMacToolsTransferColumn', 'aria-label': t('transfer.outbox.title') }, [
+        h('div', { key: 'head', className: 'dshMacToolsTransferColHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsTransferColTitle' }, t('transfer.outbox.title')),
+          h('span', { key: 'count', className: 'dshMacToolsTransferColCount' }, t('transfer.outbox.count', { count: outboxCount })),
+          h('div', { key: 'actions', className: 'dshMacToolsTransferColActions' }, [
+            h('button', {
+              key: 'refresh',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.refreshTransferOutbox() },
+            }, t('transfer.refresh')),
+            outboxCount > 0
+              ? h('button', {
+                key: 'clear',
+                type: 'button',
+                className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+                onClick: () => {
+                  if (confirmOutboxClear === true) {
+                    setConfirmOutboxClear(false)
+                    void store.clearTransferOutbox()
+                  } else {
+                    setConfirmOutboxClear(true)
+                  }
+                },
+              }, confirmOutboxClear === true ? t('transfer.outbox.clearConfirm') : t('transfer.outbox.clear'))
+              : null,
+          ]),
+        ]),
+        compose,
+        outboxBody,
+      ])
+
+      // The region owns the announcement: a nested `role="status"` live region
+      // would make screen readers announce a toast twice.
+      const toastNode = toast === null || toast === undefined
+        ? null
+        : h('div', {
+          key: 'toast',
+          className: toast.kind === 'error' ? 'dshMacToolsToast dshMacToolsToastError' : 'dshMacToolsToast',
+        }, h('span', { key: 'text', className: 'dshMacToolsToastText' }, transferToastText(t, toast)))
+
+      return h('div', { className: 'dshMacToolsTransfer' }, [
+        card,
+        h('div', { key: 'columns', className: 'dshMacToolsTransferColumns' }, [inboxPanel, outboxPanel]),
+        h('div', {
+          key: 'toast-region',
+          className: 'dshMacToolsTransferToastRegion',
+          'aria-live': 'polite',
+          'aria-atomic': 'true',
+        }, toastNode),
+      ])
+    }
+
+    // ---------------------------------------------------------------------
     // Host status pill, panel shell, rail icon
     // ---------------------------------------------------------------------
 
@@ -3923,10 +5508,11 @@ window.__ModuleLoader__.load({
     /**
      * The panel page, rendered by the `main` slot while this panel is active.
      *
-     * All three tabs stay mounted and inactive ones are hidden with the
+     * All four tabs stay mounted and inactive ones are hidden with the
      * `hidden` attribute, so an in-progress annotation set, the calculator's
-     * expression and history, and the system snapshot all survive a tab
-     * switch. Only the system tab polls, and only while it is visible.
+     * expression and history, the system snapshot and the transfer session all
+     * survive a tab switch. Only the visible tab polls: the system facts every
+     * 10 s and the phone-transfer session/lists every 2 s / 4 s.
      *
      * @param {object} props - slot props: the injected store plus the translator.
      * @returns {object} the page element.
@@ -3998,7 +5584,8 @@ window.__ModuleLoader__.load({
         let content
         if (id === 'screenshot') content = h(ScreenshotTab, { store, snapshot, t, active })
         else if (id === 'calculator') content = h(CalculatorTab, { store, snapshot, t })
-        else content = h(SystemTab, { store, snapshot, t, active })
+        else if (id === 'system') content = h(SystemTab, { store, snapshot, t, active })
+        else content = h(TransferTab, { store, snapshot, t, active })
         return h('section', {
           key: id,
           id: `${NS}-panel-${id}`,

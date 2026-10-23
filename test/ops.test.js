@@ -744,3 +744,158 @@ test('a pinned window edit request is handed to the panel exactly once', async (
     cleanup()
   }
 })
+
+/**
+ * A phone-transfer stand-in: records every call and keeps in-memory inbox and
+ * outbox lists, so the dispatcher's wiring can be tested without a listener.
+ *
+ * @returns {object} the fake service.
+ */
+function fakeTransfer() {
+  const calls = []
+  const inbox = []
+  const outbox = []
+  const now = () => new Date().toISOString()
+  return {
+    calls,
+    inbox,
+    outbox,
+    status() {
+      return {
+        active: false,
+        directory: '/tmp/phone',
+        maxFileMB: 512,
+        sessionMinutes: 30,
+        autoCopyText: false,
+        inboxCount: inbox.length,
+        outboxCount: outbox.length,
+        url: null,
+        urls: [],
+        port: null,
+        token: null,
+        qrPngBase64: null,
+        qrError: null,
+        startedAt: null,
+        expiresAt: null,
+        warnings: [],
+      }
+    },
+    async start() {
+      calls.push(['start'])
+      return Object.assign(this.status(), { active: true, url: 'http://192.168.1.2:8791/t/tok/' })
+    },
+    stop() {
+      calls.push(['stop'])
+    },
+    async listInbox() {
+      calls.push(['listInbox'])
+      return { items: inbox.slice(), count: inbox.length }
+    },
+    async clearInbox() {
+      calls.push(['clearInbox'])
+      const cleared = inbox.length
+      inbox.length = 0
+      return { cleared }
+    },
+    async deleteInbox(id) {
+      calls.push(['deleteInbox', id])
+      return { deleted: true, id }
+    },
+    async copyInboxText(id) {
+      calls.push(['copyInboxText', id])
+      return { copied: true, bytes: 3 }
+    },
+    async revealInbox(id) {
+      calls.push(['revealInbox', id])
+      return { revealed: true, path: '/tmp/photo.png' }
+    },
+    async listOutbox() {
+      calls.push(['listOutbox'])
+      return { items: outbox.slice(), count: outbox.length }
+    },
+    async clearOutbox() {
+      calls.push(['clearOutbox'])
+      return { cleared: outbox.length }
+    },
+    async removeOutbox(id) {
+      calls.push(['removeOutbox', id])
+      return { removed: true, id }
+    },
+    async addText(text) {
+      calls.push(['addText', text])
+      const item = { id: 'o-text', kind: 'text', name: 'text.txt', size: Buffer.byteLength(text), mime: 'text/plain', createdAt: now(), previewable: false, text }
+      outbox.push(item)
+      return { item }
+    },
+    async addHistory(historyId) {
+      calls.push(['addHistory', historyId])
+      const item = { id: 'o-history', kind: 'history', name: 'screenshot.png', size: 33, mime: 'image/png', createdAt: now(), previewable: true, historyId }
+      outbox.push(item)
+      return { item }
+    },
+    async addFile(path) {
+      calls.push(['addFile', path])
+      const item = { id: 'o-file', kind: 'file', name: 'report.pdf', size: 10, mime: 'application/pdf', createdAt: now(), previewable: false, path }
+      outbox.push(item)
+      return { item }
+    },
+  }
+}
+
+test('phone-transfer status, start and stop are wired to the injected service', async () => {
+  const transfer = fakeTransfer()
+  const { ops, cleanup } = makeHarness({ transfer })
+  try {
+    assert.equal((await ops.dispatch('status', {})).capabilities.transfer, true)
+    const started = await ops.dispatch('transferStart', {})
+    assert.equal(started.active, true)
+    assert.equal(started.url, 'http://192.168.1.2:8791/t/tok/')
+    const stopped = await ops.dispatch('transferStop', {})
+    assert.equal(stopped.active, false)
+    assert.equal(transfer.calls.filter((call) => call[0] === 'stop').length, 1)
+    assert.equal((await ops.dispatch('transferStatus', {})).active, false)
+  } finally {
+    cleanup()
+  }
+})
+
+test('phone-transfer inbox and outbox actions dispatch with their payloads', async () => {
+  const transfer = fakeTransfer()
+  transfer.inbox.push({ id: 'i1', kind: 'text', name: 'text.txt', size: 3, mime: 'text/plain', createdAt: '2026-10-23T00:00:00.000Z', previewable: false, text: 'hi' })
+  const { ops, cleanup } = makeHarness({ transfer, chooseFiles: async () => ['/tmp/a.pdf', '/tmp/b.png'] })
+  try {
+    const list = await ops.dispatch('transferInbox', { action: 'refresh' })
+    assert.equal(list.count, 1)
+    assert.equal((await ops.dispatch('transferInbox', { action: 'copyText', id: 'i1' })).copied, true)
+    assert.equal((await ops.dispatch('transferInbox', { action: 'reveal', id: 'i1' })).revealed, true)
+    assert.equal((await ops.dispatch('transferInbox', { action: 'delete', id: 'i1' })).deleted, true)
+    assert.equal((await ops.dispatch('transferInbox', { action: 'clear' })).cleared, 1)
+
+    const text = 'line 1\nline 2\n'
+    const sent = await ops.dispatch('transferOutbox', { action: 'addText', text })
+    assert.equal(sent.item.text, text, 'text is stored without trimming')
+    assert.equal((await ops.dispatch('transferOutbox', { action: 'addHistory', id: 'h1' })).item.historyId, 'h1')
+    const added = await ops.dispatch('transferOutbox', { action: 'addFile' })
+    assert.equal(added.cancelled, false)
+    assert.equal(added.items.length, 2)
+    assert.equal((await ops.dispatch('transferOutbox', { action: 'remove', id: 'o-text' })).removed, true)
+    assert.equal((await ops.dispatch('transferOutbox', { action: 'clear' })).cleared, 4)
+    await assert.rejects(ops.dispatch('transferOutbox', { action: 'bogus' }), (error) => error.code === 'invalid_request')
+    await assert.rejects(ops.dispatch('transferInbox', { action: 'delete' }), (error) => error.code === 'invalid_request')
+    await assert.rejects(ops.dispatch('transferOutbox', { action: 'addText', text: '   ' }), (error) => error.code === 'invalid_request')
+  } finally {
+    cleanup()
+  }
+})
+
+test('phone transfer is unsupported without the service', async () => {
+  const { ops, cleanup } = makeHarness()
+  try {
+    assert.equal((await ops.dispatch('status', {})).capabilities.transfer, false)
+    await assert.rejects(ops.dispatch('transferStatus', {}), (error) => error.code === 'unsupported')
+    await assert.rejects(ops.dispatch('transferStart', {}), (error) => error.code === 'unsupported')
+    await assert.rejects(ops.dispatch('transferInbox', { action: 'refresh' }), (error) => error.code === 'unsupported')
+  } finally {
+    cleanup()
+  }
+})

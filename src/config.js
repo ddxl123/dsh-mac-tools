@@ -27,6 +27,11 @@ export const CONFIG_DEFAULTS = Object.freeze({
   globalHotkeySound: true,
   pinAfterGlobalCapture: true,
   historyLimit: 60,
+  transferPort: 8791,
+  transferDirectory: '',
+  transferSessionMinutes: 30,
+  transferMaxFileMB: 512,
+  transferAutoCopyText: false,
 })
 
 /**
@@ -72,6 +77,34 @@ export const Config = Schema.object({
     .step(1)
     .default(60)
     .description('How many screenshots the panel history keeps. Older captures are deleted beyond this limit.'),
+  transferPort: Schema.number()
+    .min(1024)
+    .max(65535)
+    .step(1)
+    .default(8791)
+    .description(
+      'Preferred TCP port for the phone-transfer server the "Phone" panel tab starts on demand. If it is taken, the next 9 ports are tried. The server only listens while a transfer session is active.',
+    ),
+  transferDirectory: Schema.string()
+    .default('')
+    .description(
+      'Directory phone uploads are saved to, with `~` expanded. Empty means `~/Downloads/DSH 手机互传`.',
+    ),
+  transferSessionMinutes: Schema.number()
+    .min(1)
+    .max(240)
+    .step(1)
+    .default(30)
+    .description('How long one phone-transfer session stays open before it stops itself and the QR code expires.'),
+  transferMaxFileMB: Schema.number()
+    .min(1)
+    .max(4096)
+    .step(1)
+    .default(512)
+    .description('Largest single file a phone may upload, in megabytes. Larger uploads are refused and removed.'),
+  transferAutoCopyText: Schema.boolean()
+    .default(false)
+    .description('Copy text received from the phone to the macOS clipboard automatically.'),
 })
 
 /**
@@ -106,6 +139,27 @@ export function resolveConfig(rawConfig) {
   const historyLimit = Number.isInteger(config.historyLimit) && /** @type {number} */ (config.historyLimit) > 0
     ? /** @type {number} */ (config.historyLimit)
     : CONFIG_DEFAULTS.historyLimit
+  const transferPort = Number.isInteger(config.transferPort)
+    && /** @type {number} */ (config.transferPort) >= 1024
+    && /** @type {number} */ (config.transferPort) <= 65535
+    ? /** @type {number} */ (config.transferPort)
+    : CONFIG_DEFAULTS.transferPort
+  const transferDirectory = typeof config.transferDirectory === 'string'
+    ? config.transferDirectory.trim()
+    : CONFIG_DEFAULTS.transferDirectory
+  const transferSessionMinutes = Number.isFinite(config.transferSessionMinutes)
+    && /** @type {number} */ (config.transferSessionMinutes) >= 1
+    && /** @type {number} */ (config.transferSessionMinutes) <= 240
+    ? Math.round(/** @type {number} */ (config.transferSessionMinutes))
+    : CONFIG_DEFAULTS.transferSessionMinutes
+  const transferMaxFileMB = Number.isFinite(config.transferMaxFileMB)
+    && /** @type {number} */ (config.transferMaxFileMB) >= 1
+    && /** @type {number} */ (config.transferMaxFileMB) <= 4096
+    ? Math.round(/** @type {number} */ (config.transferMaxFileMB))
+    : CONFIG_DEFAULTS.transferMaxFileMB
+  const transferAutoCopyText = typeof config.transferAutoCopyText === 'boolean'
+    ? config.transferAutoCopyText
+    : CONFIG_DEFAULTS.transferAutoCopyText
   return {
     saveDirectory,
     maxShots,
@@ -115,5 +169,10 @@ export function resolveConfig(rawConfig) {
     globalHotkeySound,
     pinAfterGlobalCapture,
     historyLimit,
+    transferPort,
+    transferDirectory,
+    transferSessionMinutes,
+    transferMaxFileMB,
+    transferAutoCopyText,
   }
 }

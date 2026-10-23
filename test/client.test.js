@@ -319,6 +319,120 @@ function injectedStore(state) {
   return main.options.inject().store
 }
 
+/**
+ * An inactive `transferStatus` answer, as the Host documents it.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the status object.
+ */
+function transferStatusValue(overrides) {
+  return {
+    active: false,
+    directory: '/Users/tester/Downloads/DSH 手机互传',
+    maxFileMB: 512,
+    sessionMinutes: 30,
+    autoCopyText: false,
+    inboxCount: 0,
+    outboxCount: 0,
+    url: null,
+    urls: [],
+    port: null,
+    token: null,
+    qrPngBase64: null,
+    qrError: null,
+    startedAt: null,
+    expiresAt: null,
+    warnings: [],
+    ...(overrides === undefined ? {} : overrides),
+  }
+}
+
+/**
+ * An active `transferStatus` answer.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the status object.
+ */
+function transferActiveValue(overrides) {
+  const url = 'http://192.168.1.47:8791/t/token-abc/'
+  return transferStatusValue({
+    active: true,
+    url,
+    urls: [url, 'http://tester-mac.local:8791/t/token-abc/'],
+    port: 8791,
+    token: 'token-abc',
+    qrPngBase64: 'QkFTRTY0',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: '2026-01-01T00:30:00.000Z',
+    ...(overrides === undefined ? {} : overrides),
+  })
+}
+
+/**
+ * One inbox text item as the Host lists it.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the item.
+ */
+function inboxTextItem(overrides) {
+  return {
+    id: 'i-0123456789abcdef',
+    kind: 'text',
+    name: 'text-20260101-000000.txt',
+    size: 5,
+    mime: 'text/plain',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    previewable: false,
+    text: 'hello',
+    ...(overrides === undefined ? {} : overrides),
+  }
+}
+
+/**
+ * One outbox text item as the Host lists it.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the item.
+ */
+function outboxTextItem(overrides) {
+  return {
+    id: 'o-0123456789abcdef',
+    kind: 'text',
+    name: 'text-20260101-000000.txt',
+    size: 5,
+    mime: 'text/plain',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    previewable: false,
+    text: 'hello',
+    ...(overrides === undefined ? {} : overrides),
+  }
+}
+
+
+/**
+ * Walk a rendered element tree, invoking every function component with the
+ * stubbed React, so a crash in a tab's render path surfaces as a test failure
+ * (a throwing component blanks its slot in the real panel).
+ *
+ * @param {any} element - an element returned by `React.createElement`.
+ * @param {number} [depth] - recursion guard.
+ * @returns {void}
+ */
+function renderElementTree(element, depth = 0) {
+  if (depth > 40) throw new Error('element tree is deeper than the panel should be')
+  if (element === null || element === undefined) return
+  if (typeof element === 'string' || typeof element === 'number') return
+  if (Array.isArray(element)) {
+    for (const child of element) renderElementTree(child, depth)
+    return
+  }
+  if (typeof element.type === 'function') {
+    renderElementTree(element.type(element.props), depth + 1)
+    return
+  }
+  for (const child of element.children) renderElementTree(child, depth)
+}
+
 test('registers exactly one lazy factory under the package id', () => {
   const { registrations } = loadClient()
   assert.equal(registrations.length, 1)
@@ -361,6 +475,24 @@ test('apply registers complete zh and en dictionaries', () => {
     'tab.screenshot',
     'tab.calculator',
     'tab.system',
+    'tab.transfer',
+    'transfer.start',
+    'transfer.inbox.title',
+    'transfer.outbox.title',
+    'transfer.kind.text',
+    'transfer.error.unsupported',
+    'transfer.qrAlt',
+    'transfer.copyUrl',
+    'transfer.copyFailed',
+    'transfer.clipboardUnavailable',
+    'transfer.remaining',
+    'transfer.inbox.empty',
+    'transfer.outbox.empty',
+    'transfer.inbox.clearConfirm',
+    'transfer.outbox.clearConfirm',
+    'transfer.toast.sent',
+    'transfer.error.port_unavailable',
+    'common.cancel',
     'capture.primary',
     'capture.cancel',
     'capture.empty',
@@ -676,6 +808,9 @@ test('stylesheet keeps chrome on theme tokens and the plugin prefix', () => {
   assert.ok(css.includes('.dshMacToolsCanvas'), 'the annotation canvas must be styled')
   assert.ok(css.includes('.dshMacToolsCalcKeypad'), 'the calculator keypad must be styled')
   assert.ok(css.includes('.dshMacToolsSysGrid'), 'the system cards must be styled')
+  assert.ok(css.includes('.dshMacToolsTransferCard'), 'the phone-transfer session card must be styled')
+  assert.ok(css.includes('.dshMacToolsTransferColumns'), 'the two phone-transfer columns must be styled')
+  assert.ok(css.includes('.dshMacToolsTransferQrImage'), 'the QR code image must be styled')
 })
 
 test('customizing the global shortcut posts the accelerator and adopts the answer', async () => {
@@ -819,4 +954,506 @@ test('a pending pinned-window edit is adopted by polling', async () => {
   assert.equal(await store.pollPendingEditor(), true)
   assert.equal(store.getSnapshot().shot.id, 'shot-pin')
   assert.equal(store.getSnapshot().tab, 'screenshot')
+})
+
+test('the transfer store exposes every documented action', () => {
+  const store = injectedStore(applyClient().state)
+  const actions = [
+    'loadTransferStatus',
+    'startTransfer',
+    'stopTransfer',
+    'refreshTransferInbox',
+    'refreshTransferOutbox',
+    'deleteTransferInboxItem',
+    'clearTransferInbox',
+    'copyTransferText',
+    'revealTransferInboxItem',
+    'setTransferTextDraft',
+    'sendTransferText',
+    'sendTransferFile',
+    'sendHistoryToPhone',
+    'removeTransferOutboxItem',
+    'clearTransferOutbox',
+    'dismissTransferToast',
+    'transferInboxImageUrl',
+  ]
+  for (const name of actions) {
+    assert.equal(typeof store[name], 'function', `the transfer contract needs store.${name}`)
+  }
+})
+
+test('transfer inbox files get a cache-busted same-origin preview URL', () => {
+  const store = injectedStore(applyClient().state)
+  assert.equal(
+    store.transferInboxImageUrl(inboxTextItem()),
+    '/api/dsh-mac-tools?inbox=i-0123456789abcdef&t=1767225600000',
+  )
+})
+
+test('the transfer store starts, tracks and stops a session', async () => {
+  const active = transferActiveValue()
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    if (body.endpoint === 'transferStart') return jsonResponse(active)
+    if (body.endpoint === 'transferStop') return jsonResponse(transferStatusValue())
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.loadTransferStatus(), true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'idle')
+  assert.equal(snapshot.transfer.session, null)
+  assert.deepEqual(recorder.calls[0].body, { endpoint: 'transferStatus', payload: {} })
+
+  assert.equal(await store.startTransfer(), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'active')
+  assert.equal(snapshot.transfer.session.url, active.url)
+  assert.ok(recorder.calls.some((call) => call.body.endpoint === 'transferStart'))
+  assert.ok(
+    recorder.calls.some((call) => call.body.endpoint === 'transferInbox' && call.body.payload.action === 'refresh'),
+    'starting a session seeds the inbox',
+  )
+  assert.ok(
+    recorder.calls.some((call) => call.body.endpoint === 'transferOutbox' && call.body.payload.action === 'refresh'),
+    'starting a session seeds the outbox',
+  )
+
+  assert.equal(await store.stopTransfer(), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'idle')
+  assert.equal(snapshot.transfer.session, null)
+})
+
+test('a refused start reports the error code and a toast', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    if (body.endpoint === 'transferStart') return hostErrorResponse('port_unavailable', 'no free port')
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  await store.loadTransferStatus()
+
+  assert.equal(await store.startTransfer(), false)
+  const snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'error')
+  assert.equal(snapshot.transfer.session, null)
+  assert.equal(snapshot.transfer.error.code, 'port_unavailable')
+  assert.equal(snapshot.transfer.toast.kind, 'error')
+  assert.equal(snapshot.transfer.toast.error.code, 'port_unavailable')
+})
+
+test('a poll sent before a start landed cannot close the new session', async () => {
+  let releasePoll = null
+  const active = transferActiveValue()
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferStatus') {
+      return new Promise((resolve) => {
+        releasePoll = () => resolve(jsonResponse(transferStatusValue()))
+      })
+    }
+    if (body.endpoint === 'transferStart') return jsonResponse(active)
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  const poll = store.loadTransferStatus()
+  assert.equal(store.getSnapshot().transfer.status, 'loading')
+  assert.equal(await store.startTransfer(), true)
+  assert.equal(store.getSnapshot().transfer.status, 'active')
+
+  releasePoll()
+  assert.equal(await poll, true)
+  const snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'active', 'a stale inactive poll must not stop the session')
+  assert.equal(snapshot.transfer.session.url, active.url)
+})
+
+test('a status poll during a slow start keeps the starting card', async () => {
+  let releaseStart = null
+  let statusCalls = 0
+  const active = transferActiveValue({ qrPngBase64: 'QkFTRTY0' })
+  // While the Host compiles the QR helper the server already listens, so a
+  // status poll answers active without a QR code; the start answer is the one
+  // that carries the finished session.
+  const unfinished = transferActiveValue({ qrPngBase64: null, expiresAt: null, startedAt: null })
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferStatus') {
+      statusCalls += 1
+      return jsonResponse(statusCalls === 1 ? transferStatusValue() : unfinished)
+    }
+    if (body.endpoint === 'transferStart') {
+      return new Promise((resolve) => {
+        releaseStart = () => resolve(jsonResponse(active))
+      })
+    }
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  assert.equal(await store.loadTransferStatus(), true)
+
+  const start = store.startTransfer()
+  assert.equal(store.getSnapshot().transfer.status, 'starting')
+  assert.equal(await store.loadTransferStatus(), true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'starting', 'a poll must not flash the unfinished session card')
+  assert.equal(snapshot.transfer.session, null)
+
+  releaseStart()
+  assert.equal(await start, true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'active')
+  assert.equal(snapshot.transfer.session.qrPngBase64, 'QkFTRTY0')
+})
+
+test('a status poll during a stop keeps the stopping state until the Host answers', async () => {
+  let releaseStop = null
+  let statusCalls = 0
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferStatus') {
+      statusCalls += 1
+      // The poll that fires while the stop is in flight still sees the session.
+      return jsonResponse(statusCalls <= 2 ? transferActiveValue() : transferStatusValue())
+    }
+    if (body.endpoint === 'transferStop') {
+      return new Promise((resolve) => {
+        releaseStop = () => resolve(jsonResponse(transferStatusValue()))
+      })
+    }
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  assert.equal(await store.loadTransferStatus(), true)
+  assert.equal(store.getSnapshot().transfer.status, 'active')
+
+  const stop = store.stopTransfer()
+  assert.equal(store.getSnapshot().transfer.status, 'stopping')
+  assert.equal(await store.loadTransferStatus(), true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'stopping', 'a poll must not flip a stopping session back to active')
+  assert.notEqual(snapshot.transfer.session, null, 'the session card stays up while the stop settles')
+
+  releaseStop()
+  assert.equal(await stop, true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'idle')
+  assert.equal(snapshot.transfer.session, null)
+})
+
+test('a list read sent before a delete cannot resurrect the row', async () => {
+  const item = inboxTextItem()
+  let releaseRead = null
+  let readCalls = 0
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferInbox') {
+      if (body.payload.action === 'refresh') {
+        readCalls += 1
+        if (readCalls === 1) return jsonResponse({ items: [item], count: 1 })
+        if (readCalls === 2) {
+          return new Promise((resolve) => {
+            releaseRead = () => resolve(jsonResponse({ items: [item], count: 1 }))
+          })
+        }
+        return jsonResponse({ items: [], count: 0 })
+      }
+      if (body.payload.action === 'delete') return jsonResponse({ deleted: true, id: item.id })
+    }
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.refreshTransferInbox(), true)
+  assert.equal(store.getSnapshot().transfer.inbox.items.length, 1)
+
+  const staleRead = store.refreshTransferInbox()
+  assert.equal(await store.deleteTransferInboxItem(item.id), true)
+  assert.equal(store.getSnapshot().transfer.inbox.items.length, 0)
+  assert.equal(store.getSnapshot().transfer.inbox.count, 0)
+
+  releaseRead()
+  assert.equal(await staleRead, false, 'the pre-delete read must report it was not adopted')
+  assert.equal(store.getSnapshot().transfer.inbox.items.length, 0, 'the deleted row must stay gone')
+
+  assert.equal(await store.refreshTransferInbox(), true)
+  assert.equal(store.getSnapshot().transfer.inbox.items.length, 0)
+})
+
+test('a list read sent before a send cannot hide the queued item', async () => {
+  const item = outboxTextItem()
+  let releaseRead = null
+  let readCalls = 0
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferOutbox') {
+      if (body.payload.action === 'refresh') {
+        readCalls += 1
+        if (readCalls === 1) return jsonResponse({ items: [], count: 0 })
+        if (readCalls === 2) {
+          return new Promise((resolve) => {
+            releaseRead = () => resolve(jsonResponse({ items: [], count: 0 }))
+          })
+        }
+        return jsonResponse({ items: [item], count: 1 })
+      }
+      if (body.payload.action === 'addText') return jsonResponse({ item })
+    }
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  store.setTransferTextDraft('hello')
+
+  assert.equal(await store.refreshTransferOutbox(), true)
+  const staleRead = store.refreshTransferOutbox()
+  assert.equal(await store.sendTransferText(), true)
+  assert.equal(store.getSnapshot().transfer.outbox.items.length, 1)
+  assert.equal(store.getSnapshot().transfer.outbox.items[0].id, item.id)
+
+  releaseRead()
+  assert.equal(await staleRead, false, 'the pre-send read must report it was not adopted')
+  assert.equal(store.getSnapshot().transfer.outbox.items.length, 1, 'the sent item must stay listed')
+})
+
+test('sending text clears the draft only when it is unchanged', async () => {
+  const item = outboxTextItem()
+  let releaseSend = null
+  let addCalls = 0
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferOutbox' && body.payload.action === 'addText') {
+      addCalls += 1
+      if (addCalls === 1) {
+        return new Promise((resolve) => {
+          releaseSend = () => resolve(jsonResponse({ item }))
+        })
+      }
+      return jsonResponse({ item })
+    }
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  store.setTransferTextDraft('first message')
+  const sending = store.sendTransferText()
+  // The operator keeps typing while the Host is answering.
+  store.setTransferTextDraft('second message')
+  const duplicate = store.sendTransferText()
+  assert.equal(await duplicate, false, 'a second send must not stack on the in-flight one')
+  releaseSend()
+  assert.equal(await sending, true)
+  assert.equal(store.getSnapshot().transfer.textDraft, 'second message', 'text typed during the send must survive')
+  assert.equal(store.getSnapshot().transfer.outbox.items.length, 1)
+
+  store.setTransferTextDraft('only message')
+  assert.equal(await store.sendTransferText(), true)
+  assert.equal(store.getSnapshot().transfer.textDraft, '', 'an unchanged draft is cleared after the send')
+})
+
+test('inbox and outbox mutations keep the local lists, counts and toasts in step', async () => {
+  const first = inboxTextItem()
+  const second = inboxTextItem({ id: 'i-fedcba9876543210', text: 'second' })
+  const outItem = outboxTextItem()
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferInbox') {
+      if (body.payload.action === 'refresh') return jsonResponse({ items: [first, second], count: 2 })
+      if (body.payload.action === 'delete') return jsonResponse({ deleted: true, id: body.payload.id })
+      if (body.payload.action === 'clear') return jsonResponse({ cleared: 2 })
+      if (body.payload.action === 'copyText') return hostErrorResponse('not_found', 'gone')
+    }
+    if (body.endpoint === 'transferOutbox') {
+      if (body.payload.action === 'refresh') return jsonResponse({ items: [outItem], count: 1 })
+      if (body.payload.action === 'remove') return jsonResponse({ removed: true, id: body.payload.id })
+      if (body.payload.action === 'clear') return jsonResponse({ cleared: 1 })
+    }
+    if (body.endpoint === 'transferStatus') return jsonResponse(transferStatusValue())
+    return jsonResponse({ items: [], count: 0 })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  await store.refreshTransferInbox()
+  assert.equal(store.getSnapshot().transfer.inbox.count, 2)
+  assert.equal(await store.deleteTransferInboxItem(first.id), true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.inbox.items.length, 1)
+  assert.equal(snapshot.transfer.inbox.count, 1)
+  assert.equal(snapshot.transfer.inbox.items[0].id, second.id)
+  assert.equal(snapshot.transfer.toast.text, 'transfer.toast.deleted')
+
+  assert.equal(await store.copyTransferText(second.id), false)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.toast.kind, 'error')
+  assert.equal(snapshot.transfer.toast.error.code, 'not_found')
+
+  assert.equal(await store.clearTransferInbox(), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.inbox.items.length, 0)
+  assert.equal(snapshot.transfer.inbox.count, 0)
+  assert.equal(snapshot.transfer.toast.text, 'transfer.toast.cleared')
+
+  await store.refreshTransferOutbox()
+  assert.equal(store.getSnapshot().transfer.outbox.count, 1)
+  assert.equal(await store.removeTransferOutboxItem(outItem.id), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.outbox.items.length, 0)
+  assert.equal(snapshot.transfer.outbox.count, 0)
+  assert.equal(snapshot.transfer.toast.text, 'transfer.toast.removed')
+
+  assert.equal(await store.clearTransferOutbox(), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.outbox.items.length, 0)
+  assert.equal(snapshot.transfer.toast.text, 'transfer.toast.cleared')
+})
+
+test('a failing status poll keeps the error card steady instead of reloading it', async () => {
+  const recorder = hostRecorder(() => hostErrorResponse('unsupported', 'phone transfer is not available'))
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.loadTransferStatus(), false)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'error')
+  assert.equal(snapshot.transfer.error.code, 'unsupported')
+
+  // The retry that follows an error must not flash the loading card again; the
+  // notice stays readable until the Host answers differently.
+  const retry = store.loadTransferStatus()
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'error')
+  assert.equal(snapshot.transfer.error.code, 'unsupported')
+  assert.equal(await retry, false)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.status, 'error')
+  assert.equal(snapshot.transfer.error.code, 'unsupported')
+})
+
+test('a failing inbox read keeps the error card until the list answers', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'transferInbox') return hostErrorResponse('io_error', 'the inbox could not be read')
+    return jsonResponse(transferStatusValue())
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.refreshTransferInbox(), false)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.inbox.status, 'error')
+  assert.equal(snapshot.transfer.inbox.error.code, 'io_error')
+
+  const retry = store.refreshTransferInbox()
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.transfer.inbox.status, 'error', 'a retry must not replace the error card with a skeleton')
+  assert.equal(snapshot.transfer.inbox.error.code, 'io_error')
+  assert.equal(await retry, false)
+  assert.equal(store.getSnapshot().transfer.inbox.status, 'error')
+})
+
+test('the panel renders every transfer state without throwing', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+
+  const activeSession = {
+    active: true,
+    directory: '/Users/tester/Downloads/DSH 手机互传',
+    maxFileMB: 512,
+    sessionMinutes: 30,
+    autoCopyText: false,
+    inboxCount: 3,
+    outboxCount: 2,
+    url: 'http://192.168.1.47:8791/t/token-abc/',
+    urls: ['http://192.168.1.47:8791/t/token-abc/', 'http://tester-mac.local:8791/t/token-abc/'],
+    port: 8791,
+    token: 'token-abc',
+    qrPngBase64: 'QkFTRTY0',
+    qrError: 'the QR helper failed',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    expiresAt: '2026-01-01T00:30:00.000Z',
+    warnings: ['no LAN address was found'],
+  }
+  const inboxState = {
+    status: 'ready',
+    count: 3,
+    error: null,
+    items: [
+      inboxTextItem(),
+      inboxTextItem({ id: 'i-file-png', kind: 'file', name: 'photo.png', mime: 'image/png', previewable: true, text: undefined }),
+      inboxTextItem({ id: 'i-file-pdf', kind: 'file', name: 'scan.pdf', mime: 'application/pdf', previewable: false, text: undefined }),
+    ],
+  }
+  const outboxState = {
+    status: 'ready',
+    count: 2,
+    error: null,
+    items: [
+      outboxTextItem(),
+      outboxTextItem({ id: 'o-history', kind: 'history', name: 'screenshot-20260101-000000.png', mime: 'image/png', previewable: true, text: undefined }),
+    ],
+  }
+  const renderWith = (patch, extra) => {
+    const next = JSON.parse(JSON.stringify({
+      ...base,
+      transfer: { ...base.transfer, ...patch },
+      ...(extra === undefined ? {} : extra),
+    }))
+    store.getSnapshot = () => next
+    assert.doesNotThrow(
+      () => renderElementTree(main.component({ store, t })),
+      `rendering the panel with transfer ${JSON.stringify(Object.keys(patch))} must not throw`,
+    )
+  }
+
+  renderWith({})
+  renderWith({ status: 'loading', session: null })
+  renderWith({ status: 'starting', session: null })
+  renderWith({ status: 'stopping', session: activeSession, inbox: inboxState, outbox: outboxState })
+  renderWith({
+    status: 'active',
+    session: activeSession,
+    inbox: inboxState,
+    outbox: outboxState,
+    textDraft: 'a draft',
+    toast: { kind: 'error', text: 'transfer.toast.failed', error: { code: 'io_error', message: 'disk full', details: {} } },
+  })
+  renderWith({ status: 'idle', session: null, inbox: inboxState, outbox: outboxState })
+  renderWith({
+    status: 'error',
+    session: null,
+    error: { code: 'port_unavailable', message: 'no free port', details: {} },
+  })
+  renderWith({
+    status: 'error',
+    session: activeSession,
+    inbox: inboxState,
+    outbox: outboxState,
+    error: { code: 'io_error', message: 'disk full', details: {} },
+  })
+  renderWith({
+    status: 'idle',
+    session: null,
+    inbox: { status: 'loading', count: 0, error: null, items: [] },
+    outbox: { status: 'error', count: 0, error: { code: 'io_error', message: 'cannot read', details: {} }, items: [] },
+  })
+  renderWith({
+    status: 'idle',
+    session: null,
+    inbox: { status: 'ready', count: 1, error: { code: 'host_unreachable', message: 'gone', details: {} }, items: [inboxTextItem()] },
+    outbox: { status: 'ready', count: 0, error: null, items: [] },
+  })
+  renderWith({
+    status: 'active',
+    session: { active: true, directory: '', maxFileMB: 512, sessionMinutes: 30, url: '', urls: [], qrPngBase64: null, qrError: null, expiresAt: null, warnings: [] },
+    inbox: inboxState,
+    outbox: outboxState,
+  })
+  renderWith({ status: 'idle', session: null }, {
+    host: { kind: 'ready', value: { version: '0.2.1', saveDirectory: '/tmp', capabilities: { transfer: false } }, http: 200, message: '' },
+  })
+  renderWith({ status: 'idle', session: null }, {
+    history: {
+      status: 'ready',
+      error: null,
+      items: [{ id: 'h1', at: '2026-01-01T00:00:00.000Z', width: 10, height: 10, bytes: 1 }],
+    },
+  })
 })
