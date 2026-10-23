@@ -300,7 +300,9 @@ Payload, exactly one of:
 
 `rpm` is clamped to the fan's `[minRpm, maxRpm]`. In `manual` mode the Host
 re-applies the target every 2 s; in `curve` mode it computes the target from the
-chosen sensor every 2 s. Returns the updated `fanControl` block. Errors:
+chosen sensor every 2 s through the smoothing/hysteresis/slew-rate governor
+described in §5 (so `fanControl.appliedRpm` changes only when the smoothed
+temperature justifies it). Returns the updated `fanControl` block. Errors:
 `fan_not_ready` (not installed / daemon unreachable), `fan_apply_failed`
 (daemon refused the write; `details.reason` carries the daemon reason).
 
@@ -433,6 +435,11 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
        action per selected point, and a reset-to-default. Keep 2…8 points.
        Offer the sensor select (`fanControl.sensorOptions`, localized names).
        Commits via `fanApply` with `mode: "curve"`.
+     - Curve mode is stabilized on the Host: the chosen sensor is smoothed
+       (8 s EMA), target changes below an 80 RPM dead-band are not written, and
+       real changes are slew-rate limited (450 RPM/s up, 120 RPM/s down). The
+       panel does not need to do anything for this; do not re-derive targets
+       client-side.
      - An uninstall button (danger styling, confirm inline) that restores auto
        control and removes the root helper.
   6. **进程排行** section: CPU / 内存 sort segment, top ~12 rows with CPU%,

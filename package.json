@@ -1,6 +1,6 @@
 {
   "name": "dsh-mac-tools",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "DeepSeek Harness plugin: a local macOS toolbox panel — QQ-style screenshot capture with crop and annotations, a calculator, phone transfer (QR-code LAN page for text/files/images), clipboard, and a 运行状态 / Status dashboard (CPU, memory, disk, network, battery, system information, SMC temperatures and fans, process ranking, threshold alerts) with Macs Fan Control style fan-speed control",
   "keywords": [
     "dsh",

@@ -47,6 +47,112 @@ export const FAN_INSTALL_BINARY = `${FAN_INSTALL_DIRECTORY}/fan-daemon`
 export const FAN_SOCKET_PATH = `${FAN_INSTALL_DIRECTORY}/fan.sock`
 export const FAN_PLIST_PATH = `/Library/LaunchDaemons/${FAN_DAEMON_LABEL}.plist`
 
+/**
+ * Curve-mode stabilizer defaults.
+ *
+ * A curve is driven by one SMC temperature group, and that group is the maximum
+ * of several sensors; a single core can hop by 1–2 °C between samples while the
+ * machine's actual cooling state barely moves. Feeding that raw value into a
+ * fan curve makes the fan audibly hunt. The governor therefore:
+ *
+ * - smooths the sensor with an EMA, so single-sample maxima never reach the
+ *   fan;
+ * - ignores target changes smaller than a dead-band (hysteresis), so even the
+ *   smoothed jitter stays below the fan's notice;
+ * - slew-rate limits every real change — the fan ramps up quickly on a load
+ *   step and relaxes slowly afterwards, instead of stepping.
+ */
+export const CURVE_GOVERNOR_DEFAULTS = Object.freeze({
+  deadbandRpm: 80,
+  riseRatePerSecond: 450,
+  fallRatePerSecond: 120,
+  smoothingSeconds: 8,
+})
+
+/**
+ * Turn a noisy curve sensor reading into a stable, rate-limited fan target.
+ *
+ * Pure and clock-injected so the behaviour is unit-tested without an SMC.
+ */
+export class CurveGovernor {
+  /**
+   * @param {object} [options] - tuning overrides (tests).
+   * @param {number} [options.deadbandRpm] - minimum target change that is acted on.
+   * @param {number} [options.riseRatePerSecond] - fastest upward change.
+   * @param {number} [options.fallRatePerSecond] - fastest downward change.
+   * @param {number} [options.smoothingSeconds] - EMA time constant for the sensor.
+   */
+  constructor({
+    deadbandRpm = CURVE_GOVERNOR_DEFAULTS.deadbandRpm,
+    riseRatePerSecond = CURVE_GOVERNOR_DEFAULTS.riseRatePerSecond,
+    fallRatePerSecond = CURVE_GOVERNOR_DEFAULTS.fallRatePerSecond,
+    smoothingSeconds = CURVE_GOVERNOR_DEFAULTS.smoothingSeconds,
+  } = {}) {
+    this.deadbandRpm = deadbandRpm
+    this.riseRatePerSecond = riseRatePerSecond
+    this.fallRatePerSecond = fallRatePerSecond
+    this.smoothingSeconds = smoothingSeconds
+    /** @type {number | null} smoothed sensor temperature */
+    this.temperature = null
+    /** @type {number | null} last target handed to the fan */
+    this.target = null
+    /** @type {number | null} last update clock */
+    this.updatedAt = null
+  }
+
+  /** Forget the smoothing state (mode change, sensor change, reconnect). */
+  reset() {
+    this.temperature = null
+    this.target = null
+    this.updatedAt = null
+  }
+
+  /**
+   * Fold one raw sensor reading into the governor.
+   *
+   * @param {object} input - one reading.
+   * @param {number} input.celsius - raw curve sensor temperature.
+   * @param {{ celsius: number, rpm: number }[]} input.points - curve points.
+   * @param {{ minimum: number, maximum: number }} input.limits - fan range.
+   * @param {number} input.now - clock in epoch milliseconds.
+   * @returns {{ target: number, changed: boolean, temperature: number } | null} the target to apply, or null when the reading is unusable.
+   */
+  update({ celsius, points, limits, now }) {
+    if (!Number.isFinite(celsius)) return null
+    const nowMs = Number.isFinite(now) ? now : Date.now()
+    const low = Number.isFinite(limits?.minimum) ? limits.minimum : 0
+    const high = Number.isFinite(limits?.maximum) && limits.maximum > low ? limits.maximum : low + 1000
+    if (this.temperature === null || this.updatedAt === null) {
+      this.temperature = celsius
+      this.updatedAt = nowMs
+      const raw = curveRpm(points, this.temperature)
+      if (raw === null) return null
+      this.target = Math.round(clamp(raw, low, high))
+      return { target: this.target, changed: true, temperature: this.temperature }
+    }
+    const deltaSeconds = clamp((nowMs - this.updatedAt) / 1000, 0.05, 10)
+    const tau = this.smoothingSeconds
+    const alpha = tau <= 0 ? 1 : 1 - Math.exp(-deltaSeconds / tau)
+    this.temperature += (celsius - this.temperature) * alpha
+    this.updatedAt = nowMs
+
+    const raw = curveRpm(points, this.temperature)
+    if (raw === null) return null
+    const desired = clamp(raw, low, high)
+    const previous = this.target === null ? desired : this.target
+    let next = previous
+    const difference = desired - previous
+    if (Math.abs(difference) >= this.deadbandRpm) {
+      const rate = difference > 0 ? this.riseRatePerSecond : this.fallRatePerSecond
+      const step = Math.min(Math.abs(difference), Math.max(1, rate) * deltaSeconds)
+      next = Math.round(clamp(previous + Math.sign(difference) * step, low, high))
+    }
+    const changed = next !== this.target
+    this.target = next
+    return { target: next, changed, temperature: this.temperature }
+  }
+}
+
 /** Default temperature curve (percent of the fan's own range). */
 const DEFAULT_CURVE_PERCENT = Object.freeze([
   Object.freeze({ celsius: 40, percent: 0 }),
@@ -421,6 +527,8 @@ export class FanController {
     this.manualRpm = null
     /** @type {{ sensor: string, points: { celsius: number, rpm: number }[] } | null} */
     this.curve = null
+    /** Stabilizer for curve mode (EMA + hysteresis + slew rate). */
+    this.curveGovernor = new CurveGovernor()
     /** @type {number | null} */
     this.appliedRpm = null
     /** @type {string | null} */
@@ -936,6 +1044,7 @@ export class FanController {
     if (mode === 'auto') {
       await this.request({ op: 'autoAll' }, 5000).catch(() => {})
       this.mode = 'auto'
+      this.curveGovernor.reset()
       this.appliedRpm = null
       this.lastAppliedAt = new Date(this.now()).toISOString()
       return this.status()
@@ -946,6 +1055,7 @@ export class FanController {
       const rpm = Math.round(clamp(requested, limits.minimum, limits.maximum))
       const applied = await this.applyAll(rpm)
       this.mode = 'manual'
+      this.curveGovernor.reset()
       this.manualRpm = rpm
       this.appliedRpm = applied
       this.lastAppliedAt = new Date(this.now()).toISOString()
@@ -962,6 +1072,15 @@ export class FanController {
     const applied = await this.applyAll(Math.round(clamp(target, limits.minimum, limits.maximum)))
     this.mode = 'curve'
     this.curve = { sensor, points }
+    // Seed the stabilizer with the reading we just applied so the next tick
+    // does not step again immediately.
+    this.curveGovernor.reset()
+    this.curveGovernor.update({
+      celsius,
+      points,
+      limits: { minimum: limits.minimum, maximum: limits.maximum },
+      now: this.now(),
+    })
     this.appliedRpm = applied
     this.lastAppliedAt = new Date(this.now()).toISOString()
     return this.status()
@@ -1009,15 +1128,21 @@ export class FanController {
       }
       return
     }
+    const limits = this.range()
     let target = null
     if (this.mode === 'manual' && this.manualRpm !== null) {
       target = this.manualRpm
     } else if (this.mode === 'curve' && this.curve !== null) {
       const celsius = this.groupValue(this.sampleProvider()?.groups ?? {}, this.curve.sensor)
-      if (celsius !== null) target = curveRpm(this.curve.points, celsius)
+      const outcome = this.curveGovernor.update({
+        celsius,
+        points: this.curve.points,
+        limits: { minimum: limits.minimum, maximum: limits.maximum },
+        now,
+      })
+      if (outcome !== null) target = outcome.target
     }
     if (target === null) return
-    const limits = this.range()
     const rpm = Math.round(clamp(target, limits.minimum, limits.maximum))
     void this.applyAll(rpm).then((applied) => {
       this.appliedRpm = applied

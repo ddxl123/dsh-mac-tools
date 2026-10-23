@@ -13,6 +13,8 @@ import { test } from 'node:test'
 
 import {
   buildAppleScript,
+  CurveGovernor,
+  CURVE_GOVERNOR_DEFAULTS,
   buildDaemonPlist,
   buildInstallScript,
   buildUninstallScript,
@@ -194,7 +196,7 @@ async function startFakeDaemon(socketPath, { failWrites = false } = {}) {
  * @param {object} [options] - test options.
  * @returns {Promise<{ controller: FanController, cleanup: () => void, state: object }>} fixture.
  */
-async function createFixture({ withDaemon = true, failWrites = false } = {}) {
+async function createFixture({ withDaemon = true, failWrites = false, sampleProvider = undefined, now = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-fan-test-'))
   const plistPath = join(root, 'daemon.plist')
   const installBinary = join(root, 'fan-daemon')
@@ -205,12 +207,13 @@ async function createFixture({ withDaemon = true, failWrites = false } = {}) {
   if (withDaemon) daemon = await startFakeDaemon(socketPath, { failWrites })
   const controller = new FanController({
     stateDirectory: join(root, 'state'),
-    sampleProvider: () => FAN_SAMPLE,
+    sampleProvider: sampleProvider ?? (() => FAN_SAMPLE),
     plistPath,
     installBinary,
     socketPath,
     installDirectory: root,
     label: 'test.local.dsh.fan',
+    ...(now === undefined ? {} : { now }),
     run: async () => {
       throw Object.assign(new Error('no match'), { code: 'process_failed' })
     },
@@ -337,5 +340,161 @@ test('missing socket leads to daemon-unreachable instead of a throw', async () =
     assert.equal(status.reason, 'daemon-unreachable')
   } finally {
     await fixture.cleanup()
+  }
+})
+
+
+/** A mutable curve-mode fixture: one fan, one sensor, a controllable clock. */
+function governedFixture() {
+  const clock = { value: 5_000_000 }
+  const sensor = { celsius: 60 }
+  const points = [{ celsius: 40, rpm: 1000 }, { celsius: 100, rpm: 4900 }]
+  const sampleProvider = () => ({
+    at: clock.value,
+    fanCount: 1,
+    fans: [{ index: 0, actualRpm: 3000, targetRpm: 3000, minRpm: 1000, maxRpm: 4900, mode: 'forced' }],
+    temperatures: [{ key: 'Tp01', celsius: sensor.celsius }],
+    groups: { cpuPerformance: sensor.celsius, cpuEfficiency: sensor.celsius - 15, gpu: 55, ssd: 40 },
+  })
+  return { clock, sensor, points, sampleProvider }
+}
+
+/**
+ * Advance a controller by one tick and wait for its socket write to settle.
+ *
+ * @param {{ controller: object, clock: object }} fixture - fixture parts.
+ * @returns {Promise<number | null>} the applied RPM after the tick.
+ */
+async function tickOnce({ controller, clock }) {
+  clock.value += 1500
+  controller.tick()
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  return controller.appliedRpm
+}
+
+test('the curve governor snaps on the first reading and then holds through noise', () => {
+  const governor = new CurveGovernor()
+  const points = [{ celsius: 40, rpm: 1000 }, { celsius: 100, rpm: 4900 }]
+  const limits = { minimum: 1000, maximum: 4900 }
+  const first = governor.update({ celsius: 80, points, limits, now: 1000 })
+  assert.ok(first !== null)
+  assert.equal(first.changed, true)
+  assert.equal(first.target, 1000 + (40 / 60) * 3900)
+  const again = governor.update({ celsius: 80, points, limits, now: 2500 })
+  assert.equal(again.changed, false)
+  assert.equal(again.target, first.target)
+  assert.equal(governor.update({ celsius: null, points, limits, now: 4000 }), null)
+  governor.reset()
+  assert.equal(governor.target, null)
+  const afterReset = governor.update({ celsius: 80, points, limits, now: 5000 })
+  assert.equal(afterReset.changed, true)
+})
+
+test('the curve governor rate-limits real changes but respects the deadband', () => {
+  const points = [{ celsius: 40, rpm: 1000 }, { celsius: 100, rpm: 4900 }]
+  const limits = { minimum: 1000, maximum: 4900 }
+  // Rate limiting: one 1.5 s tick toward a much hotter reading moves at most
+  // riseRatePerSecond * dt.
+  const rising = new CurveGovernor()
+  rising.update({ celsius: 50, points, limits, now: 0 })
+  const before = rising.target
+  const rise = rising.update({ celsius: 95, points, limits, now: 1500 })
+  assert.ok(rise.target > before)
+  assert.ok(rise.target - before <= CURVE_GOVERNOR_DEFAULTS.riseRatePerSecond * 1.5 + 1)
+
+  // Dead-band: a reading whose curve delta is smaller than the band is ignored.
+  const steady = new CurveGovernor()
+  steady.update({ celsius: 50, points, limits, now: 0 })
+  const settled = steady.target
+  const nudge = steady.update({ celsius: 50.4, points, limits, now: 1500 })
+  assert.equal(nudge.target, settled)
+  assert.equal(nudge.changed, false)
+})
+
+test('curve mode no longer hunts on a jittery CPU sensor', async () => {
+  const { clock, sensor, points, sampleProvider } = governedFixture()
+  const fixture = await createFixture({ sampleProvider, now: () => clock.value })
+  const { controller, daemon, cleanup } = fixture
+  try {
+    await controller.start()
+    sensor.celsius = 84
+    await controller.apply({ mode: 'curve', sensor: 'cpuPerformance', points })
+    // Warm up until the sensor is actually the jitter series (the apply above
+    // seeds the governor, but alternate a while first to be honest about the
+    // steady state), then measure only the steady-state target.
+    const targets = []
+    for (let index = 0; index < 30; index += 1) {
+      // Alternating ±1.5 °C around 84, like the max-of-many-core sensor on this Mac.
+      sensor.celsius = index % 2 === 0 ? 85.5 : 82.5
+      await tickOnce({ controller, clock })
+      if (index >= 10) targets.push(controller.appliedRpm)
+    }
+    const settled = targets.filter((value) => Number.isFinite(value))
+    const range = Math.max(...settled) - Math.min(...settled)
+    const rawRange = ((85.5 - 82.5) / 60) * 3900
+    assert.ok(range <= 90, `stabilized target range ${range} RPM should stay inside roughly one dead-band`)
+    assert.ok(range < rawRange / 2, `stabilized range ${range} should be far below the raw curve range ${rawRange}`)
+    const sets = daemon.seen.filter((command) => command.op === 'set').map((command) => command.rpm)
+    const commanded = sets.slice(2)
+    let maxStep = 0
+    for (let index = 1; index < commanded.length; index += 1) {
+      maxStep = Math.max(maxStep, Math.abs(commanded[index] - commanded[index - 1]))
+    }
+    assert.ok(maxStep <= CURVE_GOVERNOR_DEFAULTS.riseRatePerSecond * 1.5 + 20, `largest commanded step ${maxStep} RPM is slew-limited`)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('curve mode ramps up quickly on a load step and relaxes slowly afterwards', async () => {
+  const { clock, sensor, points, sampleProvider } = governedFixture()
+  const fixture = await createFixture({ sampleProvider, now: () => clock.value })
+  const { controller, cleanup } = fixture
+  try {
+    await controller.start()
+    sensor.celsius = 60
+    await controller.apply({ mode: 'curve', sensor: 'cpuPerformance', points })
+    const cold = controller.appliedRpm
+    // A sustained load step: 60 °C → 95 °C.
+    sensor.celsius = 95
+    const rising = []
+    for (let index = 0; index < 16; index += 1) rising.push(await tickOnce({ controller, clock }))
+    const peak = rising[rising.length - 1]
+    assert.ok(peak > cold + 1000, `the fan should climb after a load step (${cold} → ${peak})`)
+    for (let index = 1; index < rising.length; index += 1) {
+      assert.ok(rising[index] >= rising[index - 1] - 1, 'rising targets stay monotonic')
+      assert.ok(rising[index] - rising[index - 1] <= CURVE_GOVERNOR_DEFAULTS.riseRatePerSecond * 1.5 + 20)
+    }
+    // Now the machine cools down: the governor must fall, but slower than it rose.
+    sensor.celsius = 62
+    const falling = []
+    for (let index = 0; index < 8; index += 1) falling.push(await tickOnce({ controller, clock }))
+    for (let index = 1; index < falling.length; index += 1) {
+      assert.ok(falling[index] <= falling[index - 1] + 1, 'falling targets stay monotonic')
+      assert.ok(falling[index - 1] - falling[index] <= CURVE_GOVERNOR_DEFAULTS.fallRatePerSecond * 1.5 + 20)
+    }
+    assert.ok(falling[falling.length - 1] < peak, 'the target eventually relaxes')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('curve mode holds the last target while the sensor reading is missing', async () => {
+  const { clock, sensor, points, sampleProvider } = governedFixture()
+  const fixture = await createFixture({ sampleProvider, now: () => clock.value })
+  const { controller, daemon, cleanup } = fixture
+  try {
+    await controller.start()
+    sensor.celsius = 70
+    await controller.apply({ mode: 'curve', sensor: 'cpuPerformance', points })
+    const before = daemon.seen.filter((command) => command.op === 'set').length
+    const target = controller.appliedRpm
+    sensor.celsius = Number.NaN
+    for (let index = 0; index < 3; index += 1) await tickOnce({ controller, clock })
+    const after = daemon.seen.filter((command) => command.op === 'set').length
+    assert.equal(after, before, 'no fan write happens without a usable reading')
+    assert.equal(controller.appliedRpm, target)
+  } finally {
+    await cleanup()
   }
 })
