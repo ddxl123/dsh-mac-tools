@@ -73,3 +73,16 @@
         transferMaxFileMB: 512
         # Copy text received from the phone to the macOS clipboard automatically.
         transferAutoCopyText: false
+        # Status tab (运行状态 / Status, in the spirit of the App Store app
+        # "State" plus Macs Fan Control): Host-side sampling cadence in
+        # milliseconds (500–10000). Software metrics are collected at most
+        # every 2 s; the panel can poll faster or slower on top of this.
+        monitorSampleMs: 1000
+        # First-run alert thresholds for the status tab. The panel edits them
+        # at runtime; the persisted choice (<profile home>/dsh-mac-tools/monitor/
+        # alerts.json) wins over these defaults.
+        alertCpuPercent: 90
+        alertTemperatureCelsius: 95
+        alertMemoryPercent: 90
+        alertCooldownSeconds: 300
+        alertNotify: true

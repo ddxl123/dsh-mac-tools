@@ -152,10 +152,11 @@ export function decodePngBase64(input) {
  * @param {{ pin: (buffer: Buffer, options?: object) => Promise<object>, count: number, dispose: () => void }} [deps.pins] - pinned-image manager (injectable for tests).
  * @param {{ add: Function, list: Function, get: Function, read: Function, remove: Function, clear: Function, maxItems: number }} [deps.history] - durable screenshot history (injectable for tests).
  * @param {import('./transfer.js').TransferServer} [deps.transfer] - phone-transfer service (injectable for tests).
+ * @param {import('./monitor.js').MonitorService} [deps.monitor] - status monitor service (injectable for tests).
  * @param {() => Promise<string[]>} [deps.chooseFiles] - native multi-select file picker (injectable for tests).
  * @returns {{ dispatch: (endpoint: string, payload?: object, signal?: AbortSignal) => Promise<any>, captureFromHotkey: () => Promise<object>, addPinnedEditor: (record: object) => object | null, cancelCapture: () => { cancelled: boolean }, status: () => object, dispose: () => void }} the dispatcher.
  */
-export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history, transfer, chooseFiles }) {
+export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history, transfer, monitor, chooseFiles }) {
   const clipboardApi = clipboard ?? { copyPngToClipboard, copyTextToClipboard, readTextClipboard }
   const revealFile = finder ?? revealInFinder
   const windowsApi = windows ?? { listWindows, selectWindow }
@@ -597,6 +598,75 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
   }
 
   /**
+   * The status monitor, when this build carries one.
+   *
+   * @returns {import('./monitor.js').MonitorService} the service.
+   */
+  function requireMonitor() {
+    if (monitor === undefined || monitor === null) {
+      throw new OpsError('unsupported', 'the status monitor is not available in this build')
+    }
+    return monitor
+  }
+
+  /** Failure codes the monitor/fan layers emit, forwarded verbatim. */
+  const MONITOR_ERROR_CODES = new Set([
+    'invalid_request',
+    'unsupported-platform',
+    'swift-missing',
+    'monitor_failed',
+    'fan_not_ready',
+    'fan_apply_failed',
+    'fan_install_busy',
+    'install-failed',
+    'uninstall-failed',
+    'cancelled',
+    'daemon-unreachable',
+    'protocol-mismatch',
+    'preset_invalid',
+    'preset_duplicate',
+    'preset_limit',
+    'preset_not_found',
+    'kill_invalid_pid',
+    'kill_not_found',
+    'kill_denied',
+  ])
+
+  /**
+   * Translate a monitor/fan failure into the dispatcher's error type.
+   *
+   * @param {unknown} failure - thrown value.
+   * @returns {OpsError} the translated failure.
+   */
+  function toMonitorOpsError(failure) {
+    if (failure instanceof OpsError) return failure
+    const code = failure !== null && typeof failure === 'object' && typeof failure.code === 'string' ? failure.code : ''
+    const message = failure instanceof Error ? failure.message : String(failure)
+    if (code !== '' && MONITOR_ERROR_CODES.has(code)) {
+      const details = failure !== null && typeof failure === 'object'
+        && failure.details !== null && typeof failure.details === 'object'
+        ? failure.details
+        : {}
+      return new OpsError(code, message, details)
+    }
+    return new OpsError('monitor_failed', message)
+  }
+
+  /**
+   * Run one monitor operation and normalize its failures.
+   *
+   * @param {() => any} operation - operation body.
+   * @returns {Promise<any>} the operation value.
+   */
+  async function monitorCall(operation) {
+    try {
+      return await operation()
+    } catch (failure) {
+      throw toMonitorOpsError(failure)
+    }
+  }
+
+  /**
    * Open the native multi-select file dialog and return the chosen paths.
    * Cancelling the dialog is a normal outcome, not a failure.
    *
@@ -707,6 +777,8 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         pin: pins !== undefined && pins !== null,
         history: history !== undefined && history !== null,
         transfer: transfer !== undefined && transfer !== null,
+        monitor: monitor !== undefined && monitor !== null,
+        fanControl: monitor !== undefined && monitor !== null && process.platform === 'darwin',
       },
       hostPid: process.pid,
       at: new Date().toISOString(),
@@ -818,6 +890,33 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         return opClipboard(payload)
       case 'system':
         return systemInfo()
+      case 'monitor':
+        return await monitorCall(() => requireMonitor().snapshot())
+      case 'monitorProcesses': {
+        const request = asObject(payload)
+        const sort = request.sort === 'memory' ? 'memory' : 'cpu'
+        const limit = Number.isInteger(request.limit) ? Math.min(50, Math.max(1, request.limit)) : 15
+        return await monitorCall(() => requireMonitor().processes({ sort, limit }))
+      }
+      case 'monitorKill': {
+        const pid = asObject(payload).pid
+        if (!Number.isInteger(pid) || pid <= 1) {
+          throw new OpsError('invalid_request', 'pid must be an integer greater than 1', { field: 'pid' })
+        }
+        return await monitorCall(() => requireMonitor().kill(pid))
+      }
+      case 'monitorAlertSave':
+        return await monitorCall(() => requireMonitor().saveAlertSettings(asObject(payload)))
+      case 'monitorAlertTest':
+        return await monitorCall(() => requireMonitor().testAlert())
+      case 'fanInstall':
+        return await monitorCall(() => requireMonitor().installFanControl())
+      case 'fanUninstall':
+        return await monitorCall(() => requireMonitor().uninstallFanControl())
+      case 'fanApply':
+        return await monitorCall(() => requireMonitor().applyFanControl(asObject(payload)))
+      case 'fanPreset':
+        return await monitorCall(() => requireMonitor().fanPresets(asObject(payload)))
       case 'transferStatus':
         return requireTransfer().status()
       case 'transferStart':

@@ -8,7 +8,9 @@
  *   - `main` keyed by the same id — the panel page itself: a QQ-style screenshot
  *     tab (native capture, window picker, crop and annotation editor), a
  *     calculator driven by the Host's own evaluator, a system-information
- *     dashboard, and a phone-transfer tab that starts a temporary LAN page a
+ *     dashboard, a live status tab (CPU / memory / disk / network / battery
+ *     charts, SMC temperature sensors, fan control, process ranking, threshold
+ *     alerts), and a phone-transfer tab that starts a temporary LAN page a
  *     phone can open by QR code to exchange text, files and screenshots.
  *   - two global shortcuts: `primary+alt+KeyM` toggles the panel, and
  *     `primary+shift+KeyA` starts an interactive capture and brings the panel
@@ -62,7 +64,7 @@ window.__ModuleLoader__.load({
     const API_PATH = '/api/dsh-mac-tools'
 
     /** The tab order used by the tablist and its arrow-key navigation. */
-    const TABS = ['screenshot', 'calculator', 'system', 'transfer']
+    const TABS = ['screenshot', 'calculator', 'system', 'monitor', 'transfer']
     /** How many successful evaluations the calculator remembers. */
     const CALC_HISTORY_LIMIT = 10
     /** How often the system tab refreshes while it is the visible tab. */
@@ -79,11 +81,119 @@ window.__ModuleLoader__.load({
     const TRANSFER_RECENT_SCREENSHOTS = 6
     /** The data-URL prefix a base64 QR PNG is rendered through. */
     const TRANSFER_QR_PREFIX = 'data:image/png;base64,'
+    /** How often the visible status tab polls the Host snapshot. */
+    const MONITOR_POLL_MS = 1000
+    /** The intervals the status toolbar offers. */
+    const MONITOR_INTERVALS = [1000, 2000, 5000]
+    /** How often the expanded process ranking refreshes. */
+    const MONITOR_PROCESS_POLL_MS = 3000
+    /** How many process rows the ranking shows (the Host may return more). */
+    const MONITOR_PROCESS_LIMIT = 12
+    /** Delay between releasing the fan slider and writing the new target. */
+    const MONITOR_FAN_DEBOUNCE_MS = 250
+    /** How long the inline kill confirmation stays armed. */
+    const MONITOR_KILL_ARM_MS = 3000
+    /** How long a saved/tested alert notice stays on screen. */
+    const MONITOR_ALERT_NOTICE_MS = 3000
+    /** The default fan curve corners, as celsius plus a min..max rpm ratio. */
+    const MONITOR_FAN_CURVE_DEFAULT = [
+      { celsius: 30, ratio: 0 },
+      { celsius: 55, ratio: 0.35 },
+      { celsius: 75, ratio: 0.7 },
+      { celsius: 95, ratio: 1 },
+    ]
+    /** The curve editor's fixed temperature domain. */
+    const MONITOR_CURVE_MIN_CELSIUS = 20
+    const MONITOR_CURVE_MAX_CELSIUS = 110
+    /** The curve editor's node budget, per the contract. */
+    const MONITOR_CURVE_MIN_POINTS = 2
+    const MONITOR_CURVE_MAX_POINTS = 8
+    /** The curve editor's SVG viewBox. */
+    const MONITOR_CURVE_WIDTH = 320
+    const MONITOR_CURVE_HEIGHT = 140
+    /**
+     * Fixed chart-series colours. Chrome (cards, text, borders) stays on theme
+     * tokens; these are series colours, which the contract allows for charts.
+     */
+    const MONITOR_SERIES_COLORS = {
+      cpu: 'var(--dsw-alias-state-business-primary)',
+      cpuTemperature: 'var(--dsw-alias-state-business-primary)',
+      cpuUser: 'var(--dsw-alias-state-business-primary)',
+      cpuSystem: 'var(--dsw-alias-state-warn-primary)',
+      cpuIdle: 'var(--dsw-alias-state-idle-primary)',
+      networkDown: 'var(--dsw-alias-state-business-primary)',
+      networkUp: '#ff9f0a',
+      memoryApp: 'var(--dsw-alias-state-business-primary)',
+      memoryWired: 'var(--dsw-alias-brand-primary)',
+      memoryCompressed: 'var(--dsw-alias-state-warn-primary)',
+      memoryCached: 'var(--dsw-alias-state-success-primary)',
+      memoryFree: 'var(--dsw-alias-bg-layer-3)',
+    }
+    /** Non-null temperature groups, in display order. */
+    const MONITOR_SENSOR_GROUPS = [
+      ['cpuPerformance', 'monitor.sensors.group.cpuPerformance'],
+      ['cpuEfficiency', 'monitor.sensors.group.cpuEfficiency'],
+      ['gpu', 'monitor.sensors.group.gpu'],
+      ['ssd', 'monitor.sensors.group.ssd'],
+      ['memory', 'monitor.sensors.group.memory'],
+      ['wifi', 'monitor.sensors.group.wifi'],
+      ['battery', 'monitor.sensors.group.battery'],
+      ['ambient', 'monitor.sensors.group.ambient'],
+    ]
+    /** Sensor group id -> locale key, so option lists can be localized. */
+    const MONITOR_SENSOR_GROUP_KEYS = {
+      cpuPerformance: 'monitor.sensors.group.cpuPerformance',
+      cpuEfficiency: 'monitor.sensors.group.cpuEfficiency',
+      gpu: 'monitor.sensors.group.gpu',
+      ssd: 'monitor.sensors.group.ssd',
+      memory: 'monitor.sensors.group.memory',
+      wifi: 'monitor.sensors.group.wifi',
+      battery: 'monitor.sensors.group.battery',
+      ambient: 'monitor.sensors.group.ambient',
+    }
+    /** SMC sensor availability reason -> locale key. */
+    const MONITOR_SENSOR_REASON_KEYS = {
+      'swift-missing': 'monitor.sensors.reason.swift-missing',
+      'smc-unavailable': 'monitor.sensors.reason.smc-unavailable',
+      'compile-failed': 'monitor.sensors.reason.compile-failed',
+      'unsupported-platform': 'monitor.sensors.reason.unsupported-platform',
+      starting: 'monitor.sensors.reason.starting',
+    }
+    /** Fan-control state reason -> locale key. */
+    const MONITOR_FAN_REASON_KEYS = {
+      'swift-missing': 'monitor.fan.reason.swift-missing',
+      'no-fans': 'monitor.fan.reason.no-fans',
+      'unsupported-platform': 'monitor.fan.reason.unsupported-platform',
+      'install-failed': 'monitor.fan.reason.install-failed',
+      cancelled: 'monitor.fan.reason.cancelled',
+      'daemon-unreachable': 'monitor.fan.reason.daemon-unreachable',
+      'not-installed': 'monitor.fan.reason.not-installed',
+    }
+    /** Alert event metric -> locale key. */
+    const MONITOR_ALERT_METRIC_KEYS = {
+      cpu: 'monitor.alerts.metric.cpu',
+      temperature: 'monitor.alerts.metric.temperature',
+      memory: 'monitor.alerts.metric.memory',
+    }
+    /** Fan mode -> locale key. */
+    const MONITOR_FAN_MODE_KEYS = {
+      auto: 'monitor.fan.mode.auto',
+      manual: 'monitor.fan.mode.manual',
+      curve: 'monitor.fan.mode.curve',
+    }
+    /** Per-fan SMC mode -> locale key. */
+    const MONITOR_FAN_ITEM_MODE_KEYS = {
+      auto: 'monitor.fan.fanState.auto',
+      forced: 'monitor.fan.fanState.forced',
+      unknown: 'monitor.fan.fanState.unknown',
+    }
+    /** The built-in preset ids, localized through `monitor.fan.preset.<id>`. */
+    const MONITOR_BUILTIN_PRESETS = ['auto', 'quiet', 'balanced', 'performance', 'max']
 
     const zh = {
       'panel': 'Mac 工具箱',
       'title': 'Mac 工具箱',
-      'subtitle': '截图与标注、计算器、手机互传、系统信息 —— 全部在本机完成。',
+      'subtitle': '截图与标注、计算器、手机互传、系统信息、运行状态 —— 全部在本机完成。',
       'hostAria': 'Host 连接状态',
       'host.loading': '正在连接本地 Host…',
       'host.ready': 'Host 已连接 · v{version}',
@@ -368,12 +478,226 @@ window.__ModuleLoader__.load({
       'transfer.error.port_unavailable': '端口被占用，无法开启互传，请稍后重试。',
       'transfer.error.not_active': '手机互传尚未开启。',
       'transfer.error.generic': '互传失败（{code}）：{message}',
+      'tab.monitor': '运行状态',
+      'monitor.toolbarAria': '运行状态工具栏',
+      'monitor.sampledAt': '取样于 {time}',
+      'monitor.paused': '已暂停',
+      'monitor.pause': '暂停',
+      'monitor.resume': '继续',
+      'monitor.refresh': '刷新',
+      'monitor.intervalAria': '刷新间隔',
+      'monitor.interval.option': '{n} 秒',
+      'monitor.loading': '正在读取运行状态…',
+      'monitor.error.generic': '无法读取运行状态：{message}',
+      'monitor.unsupported.title': '当前平台不支持运行状态',
+      'monitor.unsupported.hint': '运行状态面板需要 macOS；当前 Host 报告的运行平台是 {platform}。',
+      'monitor.badgesAria': '监控能力',
+      'monitor.badge.sensors': '温度传感器',
+      'monitor.badge.fans': '风扇控制',
+      'monitor.badge.battery': '电池',
+      'monitor.available': '可用',
+      'monitor.unavailable': '不可用',
+      'monitor.unknown': '未知',
+      'monitor.separator': '、',
+      'monitor.cpu.title': 'CPU',
+      'monitor.cpu.cores': '{count} 核',
+      'monitor.cpu.temperature': '温度',
+      'monitor.cpu.noTemperature': 'SMC 温度不可用',
+      'monitor.cpu.user': '用户',
+      'monitor.cpu.system': '系统',
+      'monitor.cpu.idle': '闲置',
+      'monitor.cpu.loadAverage': '负载 {load}',
+      'monitor.cpu.perCore': '每核心占用',
+      'monitor.cpu.coreAria': '核心 {index}：{value}%',
+      'monitor.memory.title': '内存',
+      'monitor.memory.available': '可用 {available} / 共 {total}',
+      'monitor.memory.usedPercent': '已用 {percent}%',
+      'monitor.memory.breakdown': '内存构成',
+      'monitor.memory.app': '应用',
+      'monitor.memory.wired': '联动',
+      'monitor.memory.compressed': '压缩',
+      'monitor.memory.cached': '缓存',
+      'monitor.memory.free': '空闲',
+      'monitor.memory.swap': '交换分区 {size}',
+      'monitor.memory.pressure': '内存压力',
+      'monitor.memory.pressure.normal': '正常',
+      'monitor.memory.pressure.warning': '偏高',
+      'monitor.memory.pressure.critical': '紧张',
+      'monitor.memory.pressure.unknown': '未知',
+      'monitor.disk.title': '磁盘',
+      'monitor.disk.available': '可用 {available} / 共 {total}',
+      'monitor.disk.usedPercent': '已用 {percent}%',
+      'monitor.disk.mount': '挂载于 {mount}',
+      'monitor.network.title': '网络',
+      'monitor.network.interface': '接口 {name}',
+      'monitor.network.ip': '本地 IP',
+      'monitor.network.down': '下载',
+      'monitor.network.up': '上传',
+      'monitor.network.total': '累计 ↓ {down} · ↑ {up}',
+      'monitor.network.none': '未连接',
+      'monitor.battery.title': '电池',
+      'monitor.battery.level': '电量 {percent}%',
+      'monitor.battery.charging': '正在充电',
+      'monitor.battery.charged': '已充满',
+      'monitor.battery.discharging': '使用电池',
+      'monitor.battery.remaining': '剩余 {duration}',
+      'monitor.battery.remainingUnknown': '剩余时间未知',
+      'monitor.battery.health': '健康度 {percent}%',
+      'monitor.battery.cycles': '循环 {count} 次',
+      'monitor.footer.uptime': '已运行 {duration}',
+      'monitor.footer.host': '{model} · {hostname}',
+      'monitor.footer.os': '{os} {version}',
+      'monitor.sensors.title': '温度传感器',
+      'monitor.sensors.showAll': '全部传感器',
+      'monitor.sensors.hideAll': '收起传感器',
+      'monitor.sensors.count': '{count} 个读数',
+      'monitor.sensors.empty': '没有可用的温度读数',
+      'monitor.sensors.reason.swift-missing': '缺少 swiftc（Xcode Command Line Tools），无法读取 SMC 传感器。',
+      'monitor.sensors.reason.smc-unavailable': '无法打开 AppleSMC，温度读数不可用。',
+      'monitor.sensors.reason.compile-failed': '原生采样器编译失败，温度读数不可用。',
+      'monitor.sensors.reason.unsupported-platform': '当前平台不支持 SMC 温度传感器。',
+      'monitor.sensors.reason.starting': '温度传感器正在初始化，请稍候…',
+      'monitor.sensors.reason.generic': '温度传感器不可用：{reason}',
+      'monitor.sensors.group.cpuPerformance': 'CPU 性能核',
+      'monitor.sensors.group.cpuEfficiency': 'CPU 能效核',
+      'monitor.sensors.group.gpu': 'GPU',
+      'monitor.sensors.group.ssd': 'SSD',
+      'monitor.sensors.group.memory': '内存',
+      'monitor.sensors.group.wifi': 'Wi-Fi',
+      'monitor.sensors.group.battery': '电池',
+      'monitor.sensors.group.ambient': '环境',
+      'monitor.sensors.summaryAria': '温度分组摘要',
+      'monitor.sensors.familyCount': '{count} 个',
+      'monitor.sensors.readingAria': '{key} 温度 {value}',
+      'monitor.fan.title': '风扇控制',
+      'monitor.fan.installing': '正在安装风扇控制组件…',
+      'monitor.fan.enable': '启用风扇控制',
+      'monitor.fan.enabling': '正在等待管理员授权…',
+      'monitor.fan.install.intro': '风扇转速写入需要管理员权限。启用后会安装一个仅用于写入风扇转速的特权组件：',
+      'monitor.fan.install.helper': 'root 特权助手位于「/Library/Application Support/DSH Mac Tools/」。',
+      'monitor.fan.install.daemon': '一个 LaunchDaemon 在后台启动该助手，只把风扇转速写入 SMC，不采集或上传任何数据。',
+      'monitor.fan.install.prompt': 'macOS 只会要求输入一次管理员密码；组件可以随时在本面板中卸载。',
+      'monitor.fan.notInstalledTitle': '风扇控制尚未启用',
+      'monitor.fan.errorTitle': '风扇控制出错',
+      'monitor.fan.uninstall': '卸载风扇控制',
+      'monitor.fan.uninstallConfirm': '确认卸载？风扇将立即恢复系统自动控制。',
+      'monitor.fan.uninstalling': '正在卸载…',
+      'monitor.fan.uninstallHint': '卸载会删除特权助手与 LaunchDaemon，并把风扇交还系统自动控制。',
+      'monitor.fan.reinstall': '重新安装',
+      'monitor.fan.retry': '重试',
+      'monitor.fan.reason.swift-missing': '缺少 swiftc（Xcode Command Line Tools），无法编译风扇控制组件。',
+      'monitor.fan.reason.no-fans': '这台 Mac 没有检测到风扇。',
+      'monitor.fan.reason.unsupported-platform': '风扇控制仅在 macOS 上可用。',
+      'monitor.fan.reason.install-failed': '安装风扇控制组件失败：{message}',
+      'monitor.fan.reason.cancelled': '已取消管理员授权，风扇控制未安装。',
+      'monitor.fan.reason.daemon-unreachable': '特权守护进程没有响应，请重试或重新安装。',
+      'monitor.fan.reason.not-installed': '风扇控制组件尚未安装。',
+      'monitor.fan.reason.generic': '风扇控制不可用：{reason}',
+      'monitor.fan.error.fan_not_ready': '风扇控制组件未就绪，请重试或重新安装。',
+      'monitor.fan.error.fan_apply_failed': '写入风扇转速被拒绝：{message}',
+      'monitor.fan.error.generic': '风扇控制失败（{code}）：{message}',
+      'monitor.fan.fansAria': '风扇读数',
+      'monitor.fan.fanName': '风扇 {index}',
+      'monitor.fan.actual': '当前 {rpm}',
+      'monitor.fan.target': '目标 {rpm}',
+      'monitor.fan.range': '{min}–{max} RPM',
+      'monitor.fan.fanState.auto': '系统自动',
+      'monitor.fan.fanState.forced': '强制转速',
+      'monitor.fan.fanState.unknown': '未知',
+      'monitor.fan.mode': '模式',
+      'monitor.fan.mode.auto': '自动',
+      'monitor.fan.mode.manual': '手动',
+      'monitor.fan.mode.curve': '温度曲线',
+      'monitor.fan.manual': '手动转速',
+      'monitor.fan.manualHint': '松开滑块后写入（约 250 ms 防抖）。',
+      'monitor.fan.manualValue': '{rpm} RPM',
+      'monitor.fan.holding': '控制保持中 · 目标 {rpm} RPM',
+      'monitor.fan.autoHolding': '系统自动控制',
+      'monitor.fan.appliedAt': '应用于 {time}',
+      'monitor.fan.curve.title': '温度曲线',
+      'monitor.fan.curve.sensor': '温度来源',
+      'monitor.fan.curve.hint': '拖动节点调整温度和转速；点击空白处添加节点；至少 2 个、最多 8 个节点。',
+      'monitor.fan.curve.delete': '删除节点',
+      'monitor.fan.curve.reset': '重置曲线',
+      'monitor.fan.curve.apply': '应用曲线',
+      'monitor.fan.curve.points': '{count} 个节点',
+      'monitor.fan.curve.point': '{celsius} °C → {rpm} RPM',
+      'monitor.fan.presets': '预设',
+      'monitor.fan.preset.auto': '自动',
+      'monitor.fan.preset.quiet': '安静',
+      'monitor.fan.preset.balanced': '均衡',
+      'monitor.fan.preset.performance': '性能',
+      'monitor.fan.preset.max': '最大',
+      'monitor.fan.preset.custom': '自定义',
+      'monitor.fan.preset.save': '保存当前',
+      'monitor.fan.preset.saveActive': '保存当前模式为预设',
+      'monitor.fan.preset.namePlaceholder': '预设名称',
+      'monitor.fan.preset.delete': '删除预设「{name}」',
+      'monitor.fan.preset.nameRequired': '请输入预设名称。',
+      'monitor.fan.preset.invalid': '自动模式无法保存为预设，请先选择手动或温度曲线。',
+      'monitor.fan.preset.saved': '预设已保存',
+      'monitor.fan.restoreAuto': '恢复系统自动',
+      'monitor.fan.otherControllers': '检测到其他风扇控制软件正在运行：{names}。它们会和本面板争夺风扇控制权。',
+      'monitor.fan.pendingApply': '正在应用…',
+      'monitor.fan.notReadyHint': '风扇控制组件未就绪，暂时无法读取或写入风扇转速。',
+      'monitor.processes.title': '进程排行',
+      'monitor.processes.expand': '展开进程排行',
+      'monitor.processes.collapse': '收起进程排行',
+      'monitor.processes.hint': '按 {sort} 排序 · 每 3 秒刷新',
+      'monitor.processes.sortAria': '进程排序方式',
+      'monitor.processes.sort.cpu': 'CPU',
+      'monitor.processes.sort.memory': '内存',
+      'monitor.processes.loading': '正在读取进程列表…',
+      'monitor.processes.empty': '没有可显示的进程',
+      'monitor.processes.error': '无法读取进程列表：{message}',
+      'monitor.processes.pid': 'PID {pid}',
+      'monitor.processes.name': '进程',
+      'monitor.processes.cpu': 'CPU',
+      'monitor.processes.memory': '内存',
+      'monitor.processes.rss': '常驻内存',
+      'monitor.processes.kill': '结束',
+      'monitor.processes.killArmed': '确认结束?',
+      'monitor.processes.killAria': '结束进程 {name}（PID {pid}）',
+      'monitor.processes.killProtected': '不可结束',
+      'monitor.processes.killing': '正在结束…',
+      'monitor.processes.error.kill_invalid_pid': '无法结束这个进程（PID 无效或属于 Host 本身）。',
+      'monitor.processes.error.kill_not_found': '进程已经退出。',
+      'monitor.processes.error.kill_denied': '没有权限结束这个进程。',
+      'monitor.processes.error.generic': '操作失败（{code}）：{message}',
+      'monitor.alerts.title': '告警',
+      'monitor.alerts.enabled': '启用告警',
+      'monitor.alerts.cpu': 'CPU 阈值 %',
+      'monitor.alerts.temperature': '温度阈值 °C',
+      'monitor.alerts.memory': '内存阈值 %',
+      'monitor.alerts.cooldown': '冷却时间（秒）',
+      'monitor.alerts.notify': '发送系统通知',
+      'monitor.alerts.save': '保存',
+      'monitor.alerts.saving': '正在保存…',
+      'monitor.alerts.saved': '已保存',
+      'monitor.alerts.test': '测试通知',
+      'monitor.alerts.testing': '正在发送…',
+      'monitor.alerts.testSent': '测试通知已发送',
+      'monitor.alerts.testUnavailable': '此系统不支持通知',
+      'monitor.alerts.testFailed': '测试通知失败：{message}',
+      'monitor.alerts.events': '最近的告警',
+      'monitor.alerts.eventsEmpty': '还没有触发过告警',
+      'monitor.alerts.eventRow': '达到 {value}（阈值 {threshold}）',
+      'monitor.alerts.metric.cpu': 'CPU 占用',
+      'monitor.alerts.metric.temperature': '温度',
+      'monitor.alerts.metric.memory': '内存占用',
+      'monitor.alerts.metric.unknown': '指标',
+      'monitor.alerts.cooldownHint': '同一指标在冷却时间内只提醒一次。',
+      'monitor.alerts.hint': '阈值由 Host 实时评估；触发后显示 macOS 通知（需要通知权限）。',
+      'monitor.alerts.temperatureUnavailable': '温度传感器不可用，温度告警暂时停用。',
+      'monitor.alerts.error.invalid': '请输入有效范围内的数值。',
+      'monitor.alerts.error.generic': '告警操作失败（{code}）：{message}',
+      'monitor.alerts.unavailable': '告警设置不可用',
     }
 
     const en = {
       'panel': 'Mac Tools',
       'title': 'Mac Tools',
-      'subtitle': 'Screenshots and annotations, a calculator, phone transfer, and system information — all local.',
+      'subtitle': 'Screenshots and annotations, a calculator, phone transfer, system information and live status — all local.',
       'hostAria': 'Host connection status',
       'host.loading': 'Connecting to the local Host…',
       'host.ready': 'Host connected · v{version}',
@@ -658,6 +982,220 @@ window.__ModuleLoader__.load({
       'transfer.error.port_unavailable': 'The port is unavailable, so phone transfer could not start. Try again later.',
       'transfer.error.not_active': 'Phone transfer is not running yet.',
       'transfer.error.generic': 'Phone transfer failed ({code}): {message}',
+      'tab.monitor': 'Status',
+      'monitor.toolbarAria': 'Status toolbar',
+      'monitor.sampledAt': 'Sampled {time}',
+      'monitor.paused': 'Paused',
+      'monitor.pause': 'Pause',
+      'monitor.resume': 'Resume',
+      'monitor.refresh': 'Refresh',
+      'monitor.intervalAria': 'Refresh interval',
+      'monitor.interval.option': '{n} s',
+      'monitor.loading': 'Reading live status…',
+      'monitor.error.generic': 'Cannot read live status: {message}',
+      'monitor.unsupported.title': 'Live status is not supported on this platform',
+      'monitor.unsupported.hint': 'The status panel requires macOS; the Host reports the platform as {platform}.',
+      'monitor.badgesAria': 'Monitoring capabilities',
+      'monitor.badge.sensors': 'Sensors',
+      'monitor.badge.fans': 'Fan control',
+      'monitor.badge.battery': 'Battery',
+      'monitor.available': 'Available',
+      'monitor.unavailable': 'Unavailable',
+      'monitor.unknown': 'Unknown',
+      'monitor.separator': ', ',
+      'monitor.cpu.title': 'CPU',
+      'monitor.cpu.cores': '{count} cores',
+      'monitor.cpu.temperature': 'Temperature',
+      'monitor.cpu.noTemperature': 'SMC temperature unavailable',
+      'monitor.cpu.user': 'User',
+      'monitor.cpu.system': 'System',
+      'monitor.cpu.idle': 'Idle',
+      'monitor.cpu.loadAverage': 'Load {load}',
+      'monitor.cpu.perCore': 'Per-core usage',
+      'monitor.cpu.coreAria': 'Core {index}: {value}%',
+      'monitor.memory.title': 'Memory',
+      'monitor.memory.available': '{available} available of {total}',
+      'monitor.memory.usedPercent': '{percent}% used',
+      'monitor.memory.breakdown': 'Memory breakdown',
+      'monitor.memory.app': 'App',
+      'monitor.memory.wired': 'Wired',
+      'monitor.memory.compressed': 'Compressed',
+      'monitor.memory.cached': 'Cached',
+      'monitor.memory.free': 'Free',
+      'monitor.memory.swap': 'Swap {size}',
+      'monitor.memory.pressure': 'Memory pressure',
+      'monitor.memory.pressure.normal': 'Normal',
+      'monitor.memory.pressure.warning': 'Elevated',
+      'monitor.memory.pressure.critical': 'Critical',
+      'monitor.memory.pressure.unknown': 'Unknown',
+      'monitor.disk.title': 'Disk',
+      'monitor.disk.available': '{available} available of {total}',
+      'monitor.disk.usedPercent': '{percent}% used',
+      'monitor.disk.mount': 'Mounted at {mount}',
+      'monitor.network.title': 'Network',
+      'monitor.network.interface': 'Interface {name}',
+      'monitor.network.ip': 'Local IP',
+      'monitor.network.down': 'Down',
+      'monitor.network.up': 'Up',
+      'monitor.network.total': 'Total ↓ {down} · ↑ {up}',
+      'monitor.network.none': 'Not connected',
+      'monitor.battery.title': 'Battery',
+      'monitor.battery.level': '{percent}%',
+      'monitor.battery.charging': 'Charging',
+      'monitor.battery.charged': 'Fully charged',
+      'monitor.battery.discharging': 'On battery',
+      'monitor.battery.remaining': '{duration} remaining',
+      'monitor.battery.remainingUnknown': 'Remaining time unknown',
+      'monitor.battery.health': 'Health {percent}%',
+      'monitor.battery.cycles': '{count} cycles',
+      'monitor.footer.uptime': 'Up {duration}',
+      'monitor.footer.host': '{model} · {hostname}',
+      'monitor.footer.os': '{os} {version}',
+      'monitor.sensors.title': 'Temperature sensors',
+      'monitor.sensors.showAll': 'All sensors',
+      'monitor.sensors.hideAll': 'Hide sensors',
+      'monitor.sensors.count': '{count} readings',
+      'monitor.sensors.empty': 'No temperature readings available',
+      'monitor.sensors.reason.swift-missing': 'swiftc (Xcode Command Line Tools) is missing, so SMC sensors cannot be read.',
+      'monitor.sensors.reason.smc-unavailable': 'AppleSMC could not be opened, so temperature readings are unavailable.',
+      'monitor.sensors.reason.compile-failed': 'The native sampler failed to compile, so temperature readings are unavailable.',
+      'monitor.sensors.reason.unsupported-platform': 'SMC temperature sensors are not supported on this platform.',
+      'monitor.sensors.reason.starting': 'Temperature sensors are still starting up; check back in a moment.',
+      'monitor.sensors.reason.generic': 'Temperature sensors are unavailable: {reason}',
+      'monitor.sensors.group.cpuPerformance': 'CPU performance',
+      'monitor.sensors.group.cpuEfficiency': 'CPU efficiency',
+      'monitor.sensors.group.gpu': 'GPU',
+      'monitor.sensors.group.ssd': 'SSD',
+      'monitor.sensors.group.memory': 'Memory',
+      'monitor.sensors.group.wifi': 'Wi-Fi',
+      'monitor.sensors.group.battery': 'Battery',
+      'monitor.sensors.group.ambient': 'Ambient',
+      'monitor.sensors.summaryAria': 'Temperature group summary',
+      'monitor.sensors.familyCount': '{count} keys',
+      'monitor.sensors.readingAria': '{key} at {value}',
+      'monitor.fan.title': 'Fan control',
+      'monitor.fan.installing': 'Installing the fan-control helper…',
+      'monitor.fan.enable': 'Enable fan control',
+      'monitor.fan.enabling': 'Waiting for administrator authorization…',
+      'monitor.fan.install.intro': 'Writing fan speed requires administrator rights. Enabling installs a privileged helper used only to write the fan speed:',
+      'monitor.fan.install.helper': 'A root helper at “/Library/Application Support/DSH Mac Tools/”.',
+      'monitor.fan.install.daemon': 'A LaunchDaemon starts that helper and only writes fan speed to the SMC; it collects nothing and uploads nothing.',
+      'monitor.fan.install.prompt': 'macOS asks for the administrator password exactly once; you can uninstall it from this panel at any time.',
+      'monitor.fan.notInstalledTitle': 'Fan control is not enabled',
+      'monitor.fan.errorTitle': 'Fan control error',
+      'monitor.fan.uninstall': 'Uninstall fan control',
+      'monitor.fan.uninstallConfirm': 'Uninstall now? The fan returns to system auto control immediately.',
+      'monitor.fan.uninstalling': 'Uninstalling…',
+      'monitor.fan.uninstallHint': 'Uninstalling removes the privileged helper and LaunchDaemon and gives the fan back to system auto control.',
+      'monitor.fan.reinstall': 'Reinstall',
+      'monitor.fan.retry': 'Retry',
+      'monitor.fan.reason.swift-missing': 'swiftc (Xcode Command Line Tools) is missing, so the fan-control helper cannot be compiled.',
+      'monitor.fan.reason.no-fans': 'No fan was detected on this Mac.',
+      'monitor.fan.reason.unsupported-platform': 'Fan control is only available on macOS.',
+      'monitor.fan.reason.install-failed': 'Installing the fan-control helper failed: {message}',
+      'monitor.fan.reason.cancelled': 'Administrator authorization was cancelled, so fan control was not installed.',
+      'monitor.fan.reason.daemon-unreachable': 'The privileged daemon is not answering; retry or reinstall.',
+      'monitor.fan.reason.not-installed': 'The fan-control helper is not installed yet.',
+      'monitor.fan.reason.generic': 'Fan control is unavailable: {reason}',
+      'monitor.fan.error.fan_not_ready': 'The fan-control helper is not ready; retry or reinstall.',
+      'monitor.fan.error.fan_apply_failed': 'The fan-speed write was refused: {message}',
+      'monitor.fan.error.generic': 'Fan control failed ({code}): {message}',
+      'monitor.fan.fansAria': 'Fan readings',
+      'monitor.fan.fanName': 'Fan {index}',
+      'monitor.fan.actual': 'Now {rpm}',
+      'monitor.fan.target': 'Target {rpm}',
+      'monitor.fan.range': '{min}–{max} RPM',
+      'monitor.fan.fanState.auto': 'System auto',
+      'monitor.fan.fanState.forced': 'Forced',
+      'monitor.fan.fanState.unknown': 'Unknown',
+      'monitor.fan.mode': 'Mode',
+      'monitor.fan.mode.auto': 'Auto',
+      'monitor.fan.mode.manual': 'Manual',
+      'monitor.fan.mode.curve': 'Curve',
+      'monitor.fan.manual': 'Manual speed',
+      'monitor.fan.manualHint': 'Committed when the slider is released (about 250 ms debounce).',
+      'monitor.fan.manualValue': '{rpm} RPM',
+      'monitor.fan.holding': 'Holding control · target {rpm} RPM',
+      'monitor.fan.autoHolding': 'System auto control',
+      'monitor.fan.appliedAt': 'Applied {time}',
+      'monitor.fan.curve.title': 'Temperature curve',
+      'monitor.fan.curve.sensor': 'Temperature source',
+      'monitor.fan.curve.hint': 'Drag a point to change temperature and speed; click empty space to add one; keep 2–8 points.',
+      'monitor.fan.curve.delete': 'Delete point',
+      'monitor.fan.curve.reset': 'Reset curve',
+      'monitor.fan.curve.apply': 'Apply curve',
+      'monitor.fan.curve.points': '{count} points',
+      'monitor.fan.curve.point': '{celsius} °C → {rpm} RPM',
+      'monitor.fan.presets': 'Presets',
+      'monitor.fan.preset.auto': 'Auto',
+      'monitor.fan.preset.quiet': 'Quiet',
+      'monitor.fan.preset.balanced': 'Balanced',
+      'monitor.fan.preset.performance': 'Performance',
+      'monitor.fan.preset.max': 'Max',
+      'monitor.fan.preset.custom': 'Custom',
+      'monitor.fan.preset.save': 'Save current',
+      'monitor.fan.preset.saveActive': 'Save the current mode as a preset',
+      'monitor.fan.preset.namePlaceholder': 'Preset name',
+      'monitor.fan.preset.delete': 'Delete the “{name}” preset',
+      'monitor.fan.preset.nameRequired': 'Enter a preset name.',
+      'monitor.fan.preset.invalid': 'Auto mode cannot be saved as a preset; pick Manual or Curve first.',
+      'monitor.fan.preset.saved': 'Preset saved',
+      'monitor.fan.restoreAuto': 'Restore system auto',
+      'monitor.fan.otherControllers': 'Another fan controller is running: {names}. It will fight this panel over the fan.',
+      'monitor.fan.pendingApply': 'Applying…',
+      'monitor.fan.notReadyHint': 'The fan-control helper is not ready, so fan speeds cannot be read or written right now.',
+      'monitor.processes.title': 'Top processes',
+      'monitor.processes.expand': 'Expand the process ranking',
+      'monitor.processes.collapse': 'Collapse the process ranking',
+      'monitor.processes.hint': 'Sorted by {sort} · refreshed every 3 s',
+      'monitor.processes.sortAria': 'Process sort order',
+      'monitor.processes.sort.cpu': 'CPU',
+      'monitor.processes.sort.memory': 'Memory',
+      'monitor.processes.loading': 'Reading the process list…',
+      'monitor.processes.empty': 'No processes to show',
+      'monitor.processes.error': 'Cannot read the process list: {message}',
+      'monitor.processes.pid': 'PID {pid}',
+      'monitor.processes.name': 'Process',
+      'monitor.processes.cpu': 'CPU',
+      'monitor.processes.memory': 'Memory',
+      'monitor.processes.rss': 'RSS',
+      'monitor.processes.kill': 'Kill',
+      'monitor.processes.killArmed': 'Confirm?',
+      'monitor.processes.killAria': 'Kill the process {name} (PID {pid})',
+      'monitor.processes.killProtected': 'Protected',
+      'monitor.processes.killing': 'Killing…',
+      'monitor.processes.error.kill_invalid_pid': 'That process cannot be killed (invalid PID, or it belongs to the Host itself).',
+      'monitor.processes.error.kill_not_found': 'The process already exited.',
+      'monitor.processes.error.kill_denied': 'Permission denied when killing that process.',
+      'monitor.processes.error.generic': 'Action failed ({code}): {message}',
+      'monitor.alerts.title': 'Alerts',
+      'monitor.alerts.enabled': 'Enable alerts',
+      'monitor.alerts.cpu': 'CPU threshold %',
+      'monitor.alerts.temperature': 'Temperature threshold °C',
+      'monitor.alerts.memory': 'Memory threshold %',
+      'monitor.alerts.cooldown': 'Cooldown (seconds)',
+      'monitor.alerts.notify': 'Send system notifications',
+      'monitor.alerts.save': 'Save',
+      'monitor.alerts.saving': 'Saving…',
+      'monitor.alerts.saved': 'Saved',
+      'monitor.alerts.test': 'Test notification',
+      'monitor.alerts.testing': 'Sending…',
+      'monitor.alerts.testSent': 'Test notification sent',
+      'monitor.alerts.testUnavailable': 'This system cannot show notifications',
+      'monitor.alerts.testFailed': 'The test notification failed: {message}',
+      'monitor.alerts.events': 'Recent alerts',
+      'monitor.alerts.eventsEmpty': 'No alert has fired yet',
+      'monitor.alerts.eventRow': 'reached {value} (threshold {threshold})',
+      'monitor.alerts.metric.cpu': 'CPU usage',
+      'monitor.alerts.metric.temperature': 'Temperature',
+      'monitor.alerts.metric.memory': 'Memory usage',
+      'monitor.alerts.metric.unknown': 'Metric',
+      'monitor.alerts.cooldownHint': 'Each metric alerts at most once per cooldown window.',
+      'monitor.alerts.hint': 'Thresholds are evaluated by the Host in real time; firing shows a macOS notification (notification permission required).',
+      'monitor.alerts.temperatureUnavailable': 'Temperature alerts are paused because the sensors are unavailable.',
+      'monitor.alerts.error.invalid': 'Enter a valid number in range.',
+      'monitor.alerts.error.generic': 'Alert action failed ({code}): {message}',
+      'monitor.alerts.unavailable': 'Alert settings are unavailable',
     }
 
     /**
@@ -920,6 +1458,141 @@ window.__ModuleLoader__.load({
 .dshMacToolsTransferLoading{display:flex;align-items:center;gap:8px;margin:0;padding:14px 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .dshMacToolsTransferSkeleton{height:44px;flex:none;border-radius:10px}
 .dshMacToolsTransferToastRegion{position:relative}
+.dshMacToolsMonitor{display:flex;flex-direction:column;gap:14px;min-width:0}
+.dshMacToolsMonitorToolbar{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;padding:9px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsMonitorSampledAt{flex:1;min-width:150px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorBadges{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.dshMacToolsMonitorBadge{padding:1px 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;white-space:nowrap}
+.dshMacToolsMonitorBadgeOk{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorBadgeWarn{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsMonitorBadgePaused{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-warn-primary)}
+.dshMacToolsMonitorIntervals{display:flex;align-items:center;gap:2px;padding:2px;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsMonitorInterval{height:24px;padding:0 9px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:17px;cursor:pointer}
+.dshMacToolsMonitorInterval:hover{color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorIntervalActive,.dshMacToolsMonitorIntervalActive:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-weight:500;box-shadow:inset 0 0 0 .5px var(--dsw-alias-border-l2)}
+.dshMacToolsMonitorOverview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.dshMacToolsMonitorCardWide{grid-column:1/-1}
+.dshMacToolsMonitorCardHead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:0 0 8px}
+.dshMacToolsMonitorCardTitle{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:18px;letter-spacing:.02em;text-transform:uppercase}
+.dshMacToolsMonitorCardMeta{min-width:0;margin:0 0 0 auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsMonitorBig{display:flex;align-items:baseline;gap:7px;margin:0 0 4px}
+.dshMacToolsMonitorBigValue{margin:0;color:var(--dsw-alias-label-primary);font-size:26px;line-height:32px;font-weight:500;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorBigUnit{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.dshMacToolsMonitorRowLine{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorMuted{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dshMacToolsMonitorSparkline{display:block;width:100%;height:38px;margin:7px 0 3px;overflow:visible}
+.dshMacToolsMonitorSparklineTall{height:48px}
+.dshMacToolsMonitorSparkLine{fill:none;stroke-width:1.6;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;transition:none}
+.dshMacToolsMonitorSparkArea{stroke:none;opacity:.14;transition:none}
+.dshMacToolsMonitorLegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorLegendItem{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dshMacToolsMonitorLegendDot{width:7px;height:7px;flex:none;border-radius:50%}
+.dshMacToolsMonitorCoreBars{display:flex;align-items:flex-end;gap:2px;height:26px;margin:6px 0 2px}
+.dshMacToolsMonitorCoreBar{position:relative;flex:1;min-width:2px;max-width:14px;height:100%;border-radius:3px;background:var(--dsw-alias-bg-layer-3);overflow:hidden}
+.dshMacToolsMonitorCoreFill{position:absolute;left:0;right:0;bottom:0;border-radius:inherit;background:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorStack{display:flex;width:100%;height:8px;margin:8px 0 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);overflow:hidden}
+.dshMacToolsMonitorStackPart{height:100%;min-width:0}
+.dshMacToolsMonitorPressure{flex:none;padding:0 7px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:17px;white-space:nowrap}
+.dshMacToolsMonitorPressureNormal{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorPressureWarning{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-warn-primary)}
+.dshMacToolsMonitorPressureCritical{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsMonitorFooter{display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;grid-column:1/-1;padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorSection{padding:14px 16px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);min-width:0}
+.dshMacToolsMonitorSectionHead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.dshMacToolsMonitorSectionTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:20px}
+.dshMacToolsMonitorSectionMeta{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorSectionActions{display:flex;align-items:center;gap:2px;flex-wrap:wrap;margin-left:auto}
+.dshMacToolsMonitorSectionBody{display:flex;flex-direction:column;gap:8px;min-width:0}
+.dshMacToolsMonitorChips{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorChip{display:flex;flex-direction:column;gap:1px;min-width:84px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dshMacToolsMonitorChipLabel{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;white-space:nowrap}
+.dshMacToolsMonitorChipValue{color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dshMacToolsMonitorSensorList{display:flex;flex-direction:column;gap:8px;margin:2px 0 0;max-height:320px;overflow:auto}
+.dshMacToolsMonitorSensorFamily{display:flex;flex-direction:column;gap:2px}
+.dshMacToolsMonitorSensorFamilyHead{display:flex;align-items:baseline;gap:8px;margin:0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;font-weight:500}
+.dshMacToolsMonitorSensorFamilyMeta{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorSensorRows{display:flex;flex-wrap:wrap;gap:4px 10px;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorSensorRow{display:inline-flex;align-items:baseline;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorSensorKey{color:var(--dsw-alias-label-caption);font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.dshMacToolsMonitorSensorValue{color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorFanFans{display:flex;flex-direction:column;gap:4px;margin:0 0 4px;padding:0;list-style:none}
+.dshMacToolsMonitorFanRow{display:flex;align-items:baseline;gap:8px 12px;flex-wrap:wrap;padding:6px 9px;border-radius:9px;background:var(--dsw-alias-bg-base);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorFanName{color:var(--dsw-alias-label-secondary);font-weight:500}
+.dshMacToolsMonitorFanMeta{color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorFanHint{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dshMacToolsMonitorFanBadge{padding:0 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px}
+.dshMacToolsMonitorSegmented{display:flex;align-items:center;gap:2px;padding:2px;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsMonitorSegment{height:26px;padding:0 11px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.dshMacToolsMonitorSegment:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorSegmentActive,.dshMacToolsMonitorSegmentActive:hover:not(:disabled){background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-weight:500;box-shadow:inset 0 0 0 .5px var(--dsw-alias-border-l2)}
+.dshMacToolsMonitorSegment:disabled{cursor:not-allowed;opacity:.4}
+.dshMacToolsMonitorSliderRow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dshMacToolsMonitorSlider{flex:1;min-width:140px;accent-color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorSliderValue{min-width:86px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:19px;font-weight:500;font-variant-numeric:tabular-nums;text-align:right}
+.dshMacToolsMonitorCurveBox{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dshMacToolsMonitorCurveSvg{display:block;width:100%;height:auto;touch-action:none;user-select:none;-webkit-user-select:none;cursor:crosshair}
+.dshMacToolsMonitorCurveGrid{stroke:var(--dsw-alias-border-l1);stroke-width:1;vector-effect:non-scaling-stroke}
+.dshMacToolsMonitorCurveArea{stroke:none;fill:var(--dsw-alias-state-business-primary);opacity:.12}
+.dshMacToolsMonitorCurveLine{fill:none;stroke:var(--dsw-alias-state-business-primary);stroke-width:1.8;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;transition:none}
+.dshMacToolsMonitorCurvePoint{fill:var(--dsw-alias-bg-layer-1);stroke:var(--dsw-alias-state-business-primary);stroke-width:1.8;vector-effect:non-scaling-stroke;cursor:grab;transition:none}
+.dshMacToolsMonitorCurvePointActive{fill:var(--dsw-alias-state-business-primary);stroke:var(--dsw-alias-label-primary-foreground)}
+.dshMacToolsMonitorCurveAxis{fill:var(--dsw-alias-label-caption);font-size:8px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorCurveBar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsMonitorCurveMeta{flex:1;min-width:150px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorPresets{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:2px 0 0}
+.dshMacToolsMonitorPresetWrap{display:inline-flex;align-items:center;gap:0}
+.dshMacToolsMonitorPreset{display:inline-flex;align-items:center;height:26px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.dshMacToolsMonitorPreset:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorPresetActive,.dshMacToolsMonitorPresetActive:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);font-weight:500}
+.dshMacToolsMonitorPreset:disabled{cursor:not-allowed;opacity:.4}
+.dshMacToolsMonitorPresetDelete{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:none;margin-left:-3px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:13px;line-height:1;cursor:pointer}
+.dshMacToolsMonitorPresetDelete:hover{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsMonitorPresetSave{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px}
+.dshMacToolsMonitorPresetInput{flex:0 1 160px;min-width:120px;height:28px;font-size:12px}
+.dshMacToolsMonitorWarning{display:flex;align-items:flex-start;gap:7px;margin:0;padding:8px 10px;border:.5px solid var(--dsw-alias-state-warn-secondary);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-state-warn-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.dshMacToolsMonitorWarningIcon{display:inline-flex;flex:none;margin-top:2px}
+.dshMacToolsMonitorFanFooter{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorFanBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dshMacToolsMonitorFanBar .dshMacToolsButton{margin-left:auto}
+.dshMacToolsMonitorInstallText{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;overflow-wrap:anywhere}
+.dshMacToolsMonitorInstallMeta{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.dshMacToolsMonitorProcessSort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsMonitorProcessTable{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorProcessRow{display:grid;grid-template-columns:minmax(0,1fr) 62px 62px 78px auto;align-items:center;gap:4px 10px;padding:6px 9px;border-radius:9px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorProcessRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsMonitorProcessRowHead,.dshMacToolsMonitorProcessRowHead:hover{background:transparent;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;letter-spacing:.02em;text-transform:uppercase}
+.dshMacToolsMonitorProcessName{display:flex;flex-direction:column;min-width:0}
+.dshMacToolsMonitorProcessLabel{color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsMonitorProcessPid{color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px}
+.dshMacToolsMonitorProcessValue{color:var(--dsw-alias-label-secondary);text-align:right}
+.dshMacToolsMonitorProcessActions{display:flex;justify-content:flex-end}
+.dshMacToolsMonitorKill{height:24px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:17px;cursor:pointer;white-space:nowrap}
+.dshMacToolsMonitorKill:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsMonitorKill:disabled{cursor:not-allowed;opacity:.45}
+.dshMacToolsMonitorKillArmed{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);font-weight:500}
+.dshMacToolsMonitorProtected{color:var(--dsw-alias-label-caption);font-size:10px;line-height:17px;white-space:nowrap}
+.dshMacToolsMonitorAlerts{display:flex;flex-direction:column;gap:10px}
+.dshMacToolsMonitorAlertGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.dshMacToolsMonitorField{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dshMacToolsMonitorFieldLabel{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dshMacToolsMonitorFieldInput{box-sizing:border-box;width:100%;height:30px;padding:0 9px;border:.5px solid var(--dsw-alias-border-l3);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none;font:inherit;font-size:13px;line-height:19px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorFieldInput:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorSwitchRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dshMacToolsMonitorSwitch{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.dshMacToolsMonitorSwitchOn{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorSwitchDot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--dsw-alias-state-idle-primary)}
+.dshMacToolsMonitorSwitchOn .dshMacToolsMonitorSwitchDot{background:var(--dsw-alias-state-business-primary)}
+.dshMacToolsMonitorAlertActions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsMonitorAlertNotice{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px}
+.dshMacToolsMonitorAlertError{margin:0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px}
+.dshMacToolsMonitorEventList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorEventRow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:5px 8px;border-radius:8px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorEventRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsMonitorEventMetric{color:var(--dsw-alias-label-secondary);font-weight:500;white-space:nowrap}
+.dshMacToolsMonitorEventDetail{color:var(--dsw-alias-label-tertiary)}
+.dshMacToolsMonitorEventTime{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;white-space:nowrap}
+.dshMacToolsMonitorSkeleton{height:220px}
+.dshMacToolsMonitorEmpty{margin:0;padding:14px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 @media (max-width:760px){
 .dshMacToolsContent{padding:0 20px 32px}
 .dshMacToolsHeading{padding-top:20px;align-items:flex-start;flex-wrap:wrap}
@@ -930,6 +1603,9 @@ window.__ModuleLoader__.load({
 .dshMacToolsEditorHint{display:none}
 .dshMacToolsTransferColumns{grid-template-columns:minmax(0,1fr)}
 .dshMacToolsTransferQrRow{gap:12px}
+.dshMacToolsMonitorOverview{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsMonitorProcessRow{grid-template-columns:minmax(0,1fr) 54px 54px auto}
+.dshMacToolsMonitorProcessValueRss{display:none}
 }
 @media (prefers-reduced-motion:reduce){
 .dshMacToolsPage *,.dshMacToolsToast,.dshMacToolsTextInput{animation:none!important;transition:none!important}
@@ -1671,6 +2347,500 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Monitor formatting and copy
+    // ---------------------------------------------------------------------
+
+    /**
+     * Reduce a failure to the three fields the monitor copy needs.
+     *
+     * @param {any} error - a classified failure.
+     * @returns {{ code: string, message: string, details: object }} the parts.
+     */
+    function monitorErrorParts(error) {
+      const code = error !== null && error !== undefined && typeof error.code === 'string' ? error.code : ''
+      const message = error !== null && error !== undefined && error.message ? String(error.message) : ''
+      const details = error !== null && error !== undefined && error.details !== null && typeof error === 'object' && typeof error.details === 'object'
+        ? error.details
+        : {}
+      return { code, message, details }
+    }
+
+    /**
+     * Format a byte count for a monitor card (B / KB / MB / GB).
+     *
+     * @param {number} bytes - the byte count.
+     * @returns {string} the formatted size.
+     */
+    function monitorSizeText(bytes) {
+      return transferSizeText(bytes)
+    }
+
+    /**
+     * Format a per-second byte rate as B/s, KB/s, MB/s or GB/s.
+     *
+     * @param {number} bytesPerSecond - the rate.
+     * @returns {string} the formatted rate.
+     */
+    function monitorRateText(bytesPerSecond) {
+      if (!Number.isFinite(bytesPerSecond) || bytesPerSecond < 0) return '—'
+      if (bytesPerSecond < 1024) return `${Math.round(bytesPerSecond)} B/s`
+      const units = ['KB/s', 'MB/s', 'GB/s']
+      let value = bytesPerSecond / 1024
+      let unit = 0
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024
+        unit += 1
+      }
+      const rounded = value >= 100 ? String(Math.round(value)) : value.toFixed(1)
+      return `${rounded} ${units[unit]}`
+    }
+
+    /**
+     * Format an SMC temperature.
+     *
+     * @param {number|null} value - degrees celsius.
+     * @returns {string} e.g. "72.3 °C", or an em dash when unavailable.
+     */
+    function monitorCelsiusText(value) {
+      if (!Number.isFinite(value)) return '—'
+      return `${value.toFixed(1)} °C`
+    }
+
+    /**
+     * Format a fan speed.
+     *
+     * @param {number|null} value - revolutions per minute.
+     * @returns {string} e.g. "2220 RPM".
+     */
+    function monitorRpmText(value) {
+      return Number.isFinite(value) ? `${Math.round(value)} RPM` : '—'
+    }
+
+    /**
+     * Localize the SMC availability reason.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string|null} reason - the Host's reason code.
+     * @returns {string} the localized message.
+     */
+    function monitorSensorReasonText(t, reason) {
+      const value = typeof reason === 'string' ? reason : ''
+      const key = MONITOR_SENSOR_REASON_KEYS[value]
+      if (key !== undefined) return t(key)
+      return t('monitor.sensors.reason.generic', { reason: value === '' ? t('monitor.unknown') : value })
+    }
+
+    /**
+     * Localize a fan-control state reason.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string|null} reason - the Host's reason code.
+     * @param {string|null} [message] - the Host's optional diagnostic.
+     * @returns {string} the localized message.
+     */
+    function monitorFanReasonText(t, reason, message) {
+      const value = typeof reason === 'string' ? reason : ''
+      const key = MONITOR_FAN_REASON_KEYS[value]
+      const detail = typeof message === 'string' && message !== '' ? message : ''
+      if (key !== undefined) return t(key, { message: detail })
+      return t('monitor.fan.reason.generic', { reason: value === '' ? t('monitor.unknown') : value })
+    }
+
+    /**
+     * Localize a failed snapshot poll.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} error - a classified failure.
+     * @returns {string} the localized message.
+     */
+    function monitorErrorText(t, error) {
+      const { code, message } = monitorErrorParts(error)
+      if (code === 'host_missing' || code === 'host_unreachable') return hostErrorText(t, error, 'monitor.error.generic')
+      return t('monitor.error.generic', { message: message !== '' ? message : code })
+    }
+
+    /**
+     * Localize a failed process request.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} error - a classified failure.
+     * @returns {string} the localized message.
+     */
+    function monitorProcessErrorText(t, error) {
+      const { code, message } = monitorErrorParts(error)
+      if (code === 'kill_invalid_pid') return t('monitor.processes.error.kill_invalid_pid')
+      if (code === 'kill_not_found') return t('monitor.processes.error.kill_not_found')
+      if (code === 'kill_denied') return t('monitor.processes.error.kill_denied')
+      if (code === 'host_missing' || code === 'host_unreachable') return hostErrorText(t, error, 'monitor.processes.error.generic')
+      return t('monitor.processes.error.generic', { code: code === '' ? 'unknown' : code, message })
+    }
+
+    /**
+     * Localize a failed fan request. A reason carried in `details.reason` wins
+     * over the generic code, because the Host reports daemon refusals that way.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} error - a classified failure.
+     * @returns {string} the localized message.
+     */
+    function monitorFanErrorText(t, error) {
+      const { code, message, details } = monitorErrorParts(error)
+      if (code === 'fan_not_ready') return t('monitor.fan.error.fan_not_ready')
+      if (code === 'fan_apply_failed') return t('monitor.fan.error.fan_apply_failed', { message })
+      if (typeof details.reason === 'string' && MONITOR_FAN_REASON_KEYS[details.reason] !== undefined) {
+        return monitorFanReasonText(t, details.reason, message)
+      }
+      if (code === 'host_missing' || code === 'host_unreachable') return hostErrorText(t, error, 'monitor.fan.error.generic')
+      return t('monitor.fan.error.generic', { code: code === '' ? 'unknown' : code, message })
+    }
+
+    /**
+     * Localize a failed alert request.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} error - a classified failure.
+     * @returns {string} the localized message.
+     */
+    function monitorAlertErrorText(t, error) {
+      const { code, message } = monitorErrorParts(error)
+      if (code === 'host_missing' || code === 'host_unreachable') return hostErrorText(t, error, 'monitor.alerts.error.generic')
+      return t('monitor.alerts.error.generic', { code: code === '' ? 'unknown' : code, message })
+    }
+
+    /**
+     * The localized label of a temperature group id.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string} groupId - e.g. "cpuPerformance".
+     * @returns {string} the label.
+     */
+    function monitorSensorGroupLabel(t, groupId) {
+      const key = MONITOR_SENSOR_GROUP_KEYS[groupId]
+      return key === undefined ? String(groupId) : t(key)
+    }
+
+    /**
+     * Group raw SMC readings by their key family (the first two characters),
+     * sort each family by temperature desc and the families by their hottest
+     * member, per the contract.
+     *
+     * @param {Array<object>} readings - `{ key, celsius }` entries.
+     * @returns {Array<{ family: string, readings: object[] }>} the groups.
+     */
+    function monitorSensorFamilies(readings) {
+      const list = Array.isArray(readings) ? readings : []
+      const families = new Map()
+      for (let index = 0; index < list.length; index += 1) {
+        const reading = list[index]
+        if (reading === null || typeof reading !== 'object') continue
+        if (typeof reading.key !== 'string' || !Number.isFinite(reading.celsius)) continue
+        const family = reading.key.slice(0, 2)
+        let bucket = families.get(family)
+        if (bucket === undefined) {
+          bucket = { family, readings: [] }
+          families.set(family, bucket)
+        }
+        bucket.readings.push(reading)
+      }
+      const result = [...families.values()]
+      for (let index = 0; index < result.length; index += 1) {
+        result[index].readings.sort((left, right) => right.celsius - left.celsius)
+      }
+      result.sort((left, right) => right.readings[0].celsius - left.readings[0].celsius)
+      return result
+    }
+
+    /**
+     * Build a sparkline line (and matching area) path for one series.
+     * Non-finite values are skipped, so a null temperature point leaves a gap.
+     *
+     * @param {Array<{value:number}>} series - history entries oldest → newest.
+     * @param {number} min - the domain lower bound.
+     * @param {number} max - the domain upper bound.
+     * @param {number} width - the viewBox width.
+     * @param {number} height - the viewBox height.
+     * @returns {{ line: string, area: string }} the SVG paths.
+     */
+    function monitorSparklineGeometry(series, min, max, width, height) {
+      const list = Array.isArray(series) ? series : []
+      const coords = []
+      for (let index = 0; index < list.length; index += 1) {
+        const point = list[index]
+        if (point === null || typeof point !== 'object' || !Number.isFinite(point.value)) continue
+        const ratio = clampNumber((point.value - min) / (max - min), 0, 1)
+        coords.push({
+          x: list.length > 1 ? (index / (list.length - 1)) * width : width / 2,
+          y: height - ratio * height,
+        })
+      }
+      if (coords.length === 0) return { line: '', area: '' }
+      const line = coords
+        .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+        .join(' ')
+      if (coords.length === 1) return { line, area: '' }
+      const first = coords[0]
+      const last = coords[coords.length - 1]
+      const area = `${line} L${last.x.toFixed(2)},${height} L${first.x.toFixed(2)},${height} Z`
+      return { line, area }
+    }
+
+    /**
+     * The shared domain for a multi-series sparkline.
+     *
+     * @param {Array<Array<{value:number}>>} seriesList - the series.
+     * @param {number} [fixedMin] - a domain lower bound to keep.
+     * @param {number} [fixedMax] - a domain upper bound to keep.
+     * @returns {{ min: number, max: number }} the domain.
+     */
+    function monitorSeriesBounds(seriesList, fixedMin, fixedMax) {
+      let min = Number.isFinite(fixedMin) ? fixedMin : Number.POSITIVE_INFINITY
+      let max = Number.isFinite(fixedMax) ? fixedMax : Number.NEGATIVE_INFINITY
+      const list = Array.isArray(seriesList) ? seriesList : []
+      for (let seriesIndex = 0; seriesIndex < list.length; seriesIndex += 1) {
+        const series = Array.isArray(list[seriesIndex]) ? list[seriesIndex] : []
+        for (let pointIndex = 0; pointIndex < series.length; pointIndex += 1) {
+          const point = series[pointIndex]
+          if (point === null || typeof point !== 'object' || !Number.isFinite(point.value)) continue
+          if (!Number.isFinite(fixedMin)) min = Math.min(min, point.value)
+          if (!Number.isFinite(fixedMax)) max = Math.max(max, point.value)
+        }
+      }
+      if (!Number.isFinite(min)) min = 0
+      if (!Number.isFinite(max)) max = min + 1
+      if (!(max > min)) max = min + 1
+      return { min, max }
+    }
+
+    /**
+     * The memory breakdown bar's segments. The detailed app/wired/compressed/
+     * cached split is preferred; when the Host reports all four as zero the
+     * bar falls back to used vs available so the card is still meaningful.
+     *
+     * @param {object} memory - the sample's memory block.
+     * @returns {Array<{ key: string, labelKey: string|null, bytes: number, percent: number, color: string }>} the segments.
+     */
+    function monitorMemorySegments(memory) {
+      const block = memory !== null && typeof memory === 'object' ? memory : {}
+      const total = Number.isFinite(block.totalBytes) && block.totalBytes > 0 ? block.totalBytes : 0
+      const detailed = [
+        { key: 'app', labelKey: 'monitor.memory.app', bytes: block.appBytes, color: MONITOR_SERIES_COLORS.memoryApp },
+        { key: 'wired', labelKey: 'monitor.memory.wired', bytes: block.wiredBytes, color: MONITOR_SERIES_COLORS.memoryWired },
+        { key: 'compressed', labelKey: 'monitor.memory.compressed', bytes: block.compressedBytes, color: MONITOR_SERIES_COLORS.memoryCompressed },
+        { key: 'cached', labelKey: 'monitor.memory.cached', bytes: block.cachedBytes, color: MONITOR_SERIES_COLORS.memoryCached },
+      ].filter((segment) => Number.isFinite(segment.bytes) && segment.bytes > 0)
+      if (total > 0 && detailed.length > 0) {
+        let assignedBytes = 0
+        let assignedPercent = 0
+        const segments = detailed.map((segment) => {
+          const percent = clampNumber((segment.bytes / total) * 100, 0, 100)
+          assignedBytes += segment.bytes
+          assignedPercent += percent
+          return {
+            key: segment.key,
+            labelKey: segment.labelKey,
+            bytes: segment.bytes,
+            percent,
+            color: segment.color,
+          }
+        })
+        const restPercent = Math.max(0, 100 - assignedPercent)
+        if (restPercent > 0.05) {
+          segments.push({
+            key: 'free',
+            labelKey: 'monitor.memory.free',
+            bytes: Math.max(0, total - assignedBytes),
+            percent: restPercent,
+            color: MONITOR_SERIES_COLORS.memoryFree,
+          })
+        }
+        return segments
+      }
+      const used = Number.isFinite(block.usedBytes) ? block.usedBytes : NaN
+      const available = Number.isFinite(block.availableBytes) ? block.availableBytes : NaN
+      if (Number.isFinite(used) && Number.isFinite(available) && used + available > 0) {
+        const sum = used + available
+        return [
+          { key: 'used', labelKey: null, bytes: used, percent: (used / sum) * 100, color: MONITOR_SERIES_COLORS.memoryApp },
+          { key: 'free', labelKey: 'monitor.memory.free', bytes: available, percent: (available / sum) * 100, color: MONITOR_SERIES_COLORS.memoryFree },
+        ]
+      }
+      return []
+    }
+
+    /**
+     * Localize the memory-pressure badge.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string|null} pressure - "normal" | "warning" | "critical".
+     * @returns {{ label: string, className: string }} the badge.
+     */
+    function monitorPressureInfo(t, pressure) {
+      if (pressure === 'normal' || pressure === 'warning' || pressure === 'critical') {
+        const suffix = pressure.charAt(0).toUpperCase() + pressure.slice(1)
+        return {
+          label: t(`monitor.memory.pressure.${pressure}`),
+          className: `dshMacToolsMonitorPressure dshMacToolsMonitorPressure${suffix}`,
+        }
+      }
+      return { label: t('monitor.memory.pressure.unknown'), className: 'dshMacToolsMonitorPressure' }
+    }
+
+    /**
+     * The localized name of one fan preset. Built-ins localize by their fixed
+     * id; custom presets carry the user's name.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} preset - the preset block.
+     * @returns {string} the label.
+     */
+    function monitorPresetLabel(t, preset) {
+      if (preset === null || typeof preset !== 'object') return t('monitor.fan.preset.custom')
+      const id = typeof preset.id === 'string' ? preset.id : ''
+      if (preset.builtin === true && MONITOR_BUILTIN_PRESETS.indexOf(id) >= 0) return t(`monitor.fan.preset.${id}`)
+      if (typeof preset.name === 'string' && preset.name !== '') return preset.name
+      return t('monitor.fan.preset.custom')
+    }
+
+    /**
+     * Whether a preset describes the fan state currently applied by the Host.
+     *
+     * @param {object} preset - the preset block.
+     * @param {object} fanControl - the fanControl block.
+     * @returns {boolean} whether it is the active preset.
+     */
+    function monitorPresetActive(preset, fanControl) {
+      if (preset === null || typeof preset !== 'object') return false
+      if (fanControl === null || typeof fanControl !== 'object') return false
+      const mode = typeof fanControl.mode === 'string' ? fanControl.mode : ''
+      if (preset.mode !== mode) return false
+      if (mode === 'auto') return preset.id === 'auto'
+      if (mode === 'manual') {
+        const rpm = Number.isFinite(preset.rpm) ? preset.rpm : NaN
+        const current = Number.isFinite(fanControl.manualRpm) ? fanControl.manualRpm : NaN
+        return Number.isFinite(rpm) && Number.isFinite(current) && Math.abs(rpm - current) < 1
+      }
+      if (mode === 'curve') {
+        if (preset.builtin === true) return false
+        const left = preset.curve !== null && typeof preset.curve === 'object' ? preset.curve : null
+        const right = fanControl.curve !== null && typeof fanControl.curve === 'object' ? fanControl.curve : null
+        if (left === null || right === null) return false
+        if (left.sensor !== right.sensor) return false
+        const leftPoints = Array.isArray(left.points) ? left.points : []
+        const rightPoints = Array.isArray(right.points) ? right.points : []
+        if (leftPoints.length !== rightPoints.length) return false
+        for (let index = 0; index < leftPoints.length; index += 1) {
+          const a = leftPoints[index]
+          const b = rightPoints[index]
+          if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+          if (!Number.isFinite(a.celsius) || !Number.isFinite(b.celsius)) return false
+          if (!Number.isFinite(a.rpm) || !Number.isFinite(b.rpm)) return false
+          if (Math.abs(a.celsius - b.celsius) > 0.05) return false
+          if (Math.abs(a.rpm - b.rpm) > 0.5) return false
+        }
+        return true
+      }
+      return false
+    }
+
+    /**
+     * The localized label of a fan mode.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string} mode - "auto" | "manual" | "curve".
+     * @returns {string} the label.
+     */
+    function monitorFanModeLabel(t, mode) {
+      const key = MONITOR_FAN_MODE_KEYS[mode]
+      return key === undefined ? t('monitor.fan.fanState.unknown') : t(key)
+    }
+
+    /**
+     * The localized label of a per-fan SMC mode.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string} mode - "auto" | "forced" | "unknown".
+     * @returns {string} the label.
+     */
+    function monitorFanItemModeLabel(t, mode) {
+      const key = MONITOR_FAN_ITEM_MODE_KEYS[mode]
+      return key === undefined ? t('monitor.fan.fanState.unknown') : t(key)
+    }
+
+    /**
+     * The localized label of an alert event's metric.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string} metric - "cpu" | "temperature" | "memory".
+     * @returns {string} the label.
+     */
+    function monitorAlertMetricLabel(t, metric) {
+      const key = MONITOR_ALERT_METRIC_KEYS[metric]
+      return key === undefined ? t('monitor.alerts.metric.unknown') : t(key)
+    }
+
+    /**
+     * Join controller names with the locale-aware separator.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {string[]} names - the names.
+     * @returns {string} the joined string.
+     */
+    function monitorNameListText(t, names) {
+      return names.join(t('monitor.separator'))
+    }
+
+    /**
+     * The default fan curve, scaled into a fan's min..max range.
+     *
+     * @param {number} minRpm - the fan minimum.
+     * @param {number} maxRpm - the fan maximum.
+     * @returns {Array<{celsius:number,rpm:number}>} the points.
+     */
+    function monitorDefaultCurve(minRpm, maxRpm) {
+      const low = Number.isFinite(minRpm) ? minRpm : 1000
+      const high = Number.isFinite(maxRpm) && maxRpm > low ? maxRpm : low + 3000
+      return MONITOR_FAN_CURVE_DEFAULT.map((corner) => ({
+        celsius: corner.celsius,
+        rpm: Math.round(low + (high - low) * corner.ratio),
+      }))
+    }
+
+    /**
+     * Copy a Host curve into an editable 2..8 point draft, clamped to the fan
+     * range and the editor's temperature domain, sorted by celsius.
+     *
+     * @param {object|null} curve - the Host's `{ sensor, points }`.
+     * @param {number} minRpm - the fan minimum.
+     * @param {number} maxRpm - the fan maximum.
+     * @returns {{ sensor: string, points: Array<{celsius:number,rpm:number}> }} the draft.
+     */
+    function monitorSanitizeCurve(curve, minRpm, maxRpm) {
+      const source = curve !== null && typeof curve === 'object' ? curve : {}
+      const low = Number.isFinite(minRpm) ? minRpm : 1000
+      const high = Number.isFinite(maxRpm) && maxRpm > low ? maxRpm : low + 3000
+      const rawPoints = Array.isArray(source.points) ? source.points : []
+      const points = []
+      for (let index = 0; index < rawPoints.length; index += 1) {
+        const point = rawPoints[index]
+        if (point === null || typeof point !== 'object') continue
+        if (!Number.isFinite(point.celsius) || !Number.isFinite(point.rpm)) continue
+        points.push({
+          celsius: Math.round(clampNumber(point.celsius, MONITOR_CURVE_MIN_CELSIUS, MONITOR_CURVE_MAX_CELSIUS) * 10) / 10,
+          rpm: Math.round(clampNumber(point.rpm, low, high)),
+        })
+      }
+      points.sort((left, right) => left.celsius - right.celsius)
+      const deduped = []
+      for (let index = 0; index < points.length; index += 1) {
+        if (deduped.length > 0 && points[index].celsius - deduped[deduped.length - 1].celsius < 1) continue
+        deduped.push(points[index])
+        if (deduped.length >= MONITOR_CURVE_MAX_POINTS) break
+      }
+      const sensor = typeof source.sensor === 'string' && source.sensor !== '' ? source.sensor : 'cpuPerformance'
+      return { sensor, points: deduped }
+    }
+
+    // ---------------------------------------------------------------------
     // Glyphs
     // ---------------------------------------------------------------------
 
@@ -1994,6 +3164,26 @@ window.__ModuleLoader__.load({
           toast: null,
           error: null,
         },
+        monitor: {
+          status: 'idle',
+          value: null,
+          error: null,
+          paused: false,
+          intervalMs: MONITOR_POLL_MS,
+          fetchedAt: 0,
+          processes: {
+            open: false,
+            status: 'idle',
+            value: null,
+            error: null,
+            sort: 'cpu',
+            armedPid: null,
+            killingPid: null,
+            actionError: null,
+          },
+          fan: { pending: null, error: null },
+          alerts: { saving: false, testing: false, error: null },
+        },
       }
       let hostRequest = null
       let windowsRequest = null
@@ -2029,6 +3219,26 @@ window.__ModuleLoader__.load({
       const transferActionRequests = new Map()
       /** Whether the user changed the hide-while-capturing toggle this session. */
       let hideAppTouched = false
+      /** The in-flight `monitor` poll, shared by every caller for dedupe. */
+      let monitorRequest = null
+      /** The in-flight `monitorProcesses` read. */
+      let monitorProcessesRequest = null
+      /** Whether a sort change arrived while a process read was in flight. */
+      let monitorProcessesReload = false
+      /**
+       * Bumped when the process sort changes or the section closes, so an
+       * answer for the previous sort cannot overwrite the current ranking.
+       */
+      let monitorProcessGeneration = 0
+      /** The in-flight alert-save promise, so double clicks cannot stack. */
+      let monitorAlertSaveRequest = null
+      /** The in-flight alert-test promise. */
+      let monitorAlertTestRequest = null
+      /**
+       * A `fanApply` payload queued while another apply was in flight. The
+       * latest release wins; only one write is ever outstanding.
+       */
+      let pendingFanApply = null
 
       /**
        * Replace part of the snapshot and notify subscribers. A subscriber that
@@ -3188,6 +4398,584 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // --- live status ----------------------------------------------------
+
+      /**
+       * Replace part of the monitor slice.
+       *
+       * @param {object} patch - the monitor fields to replace.
+       * @returns {void}
+       */
+      function updateMonitor(patch) {
+        publish({ monitor: Object.assign({}, snapshot.monitor, patch) })
+      }
+
+      /**
+       * Replace part of the process sub-slice.
+       *
+       * @param {object} patch - the process fields to replace.
+       * @returns {void}
+       */
+      function updateMonitorProcesses(patch) {
+        updateMonitor({ processes: Object.assign({}, snapshot.monitor.processes, patch) })
+      }
+
+      /**
+       * Replace part of the fan sub-slice.
+       *
+       * @param {object} patch - the fan fields to replace.
+       * @returns {void}
+       */
+      function updateMonitorFan(patch) {
+        updateMonitor({ fan: Object.assign({}, snapshot.monitor.fan, patch) })
+      }
+
+      /**
+       * Replace part of the alert sub-slice.
+       *
+       * @param {object} patch - the alert fields to replace.
+       * @returns {void}
+       */
+      function updateMonitorAlerts(patch) {
+        updateMonitor({ alerts: Object.assign({}, snapshot.monitor.alerts, patch) })
+      }
+
+      /**
+       * Read the live status snapshot. The visible tab owns the one-second
+       * timer; this only dedupes in-flight requests, publishes the first-answer
+       * skeleton and normalizes failures so the tab can localize them.
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether a snapshot was adopted.
+       */
+      function loadMonitor(options) {
+        if (monitorRequest !== null) return monitorRequest
+        const firstLoad = snapshot.monitor.value === null
+        updateMonitor({ status: firstLoad ? 'loading' : 'ready', error: null })
+        const run = host.post('monitor', {}, options).then((value) => {
+          const next = value !== null && typeof value === 'object' ? value : {}
+          updateMonitor({ status: 'ready', value: next, error: null, fetchedAt: Date.now() })
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          if (failure.code === 'aborted') {
+            updateMonitor({ status: snapshot.monitor.value === null ? 'idle' : 'ready' })
+            return false
+          }
+          updateMonitor({
+            status: snapshot.monitor.value === null ? 'error' : 'ready',
+            error: failure,
+          })
+          return false
+        }).then((result) => {
+          monitorRequest = null
+          return result
+        }, (error) => {
+          monitorRequest = null
+          throw error
+        })
+        monitorRequest = run
+        return run
+      }
+
+      /**
+       * Choose one of the offered polling intervals.
+       *
+       * @param {number} intervalMs - 1000, 2000 or 5000.
+       * @returns {void}
+       */
+      function setMonitorInterval(intervalMs) {
+        const next = Number(intervalMs)
+        if (!Number.isFinite(next) || MONITOR_INTERVALS.indexOf(next) < 0) return
+        if (snapshot.monitor.intervalMs === next) return
+        updateMonitor({ intervalMs: next })
+      }
+
+      /**
+       * Pause or resume polling. The last snapshot stays on screen so the
+       * charts freeze instead of disappearing.
+       *
+       * @param {boolean} paused - whether polling stops.
+       * @returns {void}
+       */
+      function setMonitorPaused(paused) {
+        updateMonitor({ paused: paused === true })
+      }
+
+      /**
+       * A manual refresh; it works while paused too.
+       *
+       * @returns {Promise<boolean>} whether a snapshot was adopted.
+       */
+      function refreshMonitor() {
+        return loadMonitor()
+      }
+
+      /**
+       * Toggle the process section. Polling is owned by the visible tab and
+       * only runs while this is open; opening seeds the first read.
+       *
+       * @returns {void}
+       */
+      function toggleMonitorProcesses() {
+        const processes = snapshot.monitor.processes
+        const open = processes.open !== true
+        monitorProcessGeneration += 1
+        updateMonitorProcesses({ open, armedPid: null, actionError: null })
+        if (open) void loadMonitorProcesses()
+      }
+
+      /**
+       * Switch the process ranking between CPU and memory.
+       *
+       * @param {string} sort - "cpu" or "memory".
+       * @returns {void}
+       */
+      function setMonitorProcessSort(sort) {
+        const next = sort === 'memory' ? 'memory' : 'cpu'
+        const processes = snapshot.monitor.processes
+        if (processes.sort === next) return
+        monitorProcessGeneration += 1
+        updateMonitorProcesses({ sort: next, armedPid: null, actionError: null })
+        if (processes.open === true) void loadMonitorProcesses()
+      }
+
+      /**
+       * Read the process ranking for the current sort. Deduped; a stale answer
+       * for a previous sort is discarded through the generation counter.
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether the ranking was adopted.
+       */
+      function loadMonitorProcesses(options) {
+        if (monitorProcessesRequest !== null) {
+          monitorProcessesReload = true
+          return monitorProcessesRequest
+        }
+        const state = snapshot.monitor.processes
+        if (state.open !== true) return Promise.resolve(false)
+        const firstLoad = state.value === null
+        const keepError = firstLoad !== true && state.error !== null && state.error !== undefined
+        const generation = monitorProcessGeneration
+        const sort = state.sort
+        let aborted = false
+        updateMonitorProcesses({
+          status: firstLoad ? 'loading' : (keepError ? 'error' : 'ready'),
+          error: keepError ? state.error : null,
+        })
+        const run = host.post('monitorProcesses', { sort }, options).then((value) => {
+          if (generation !== monitorProcessGeneration) return false
+          const record = value !== null && typeof value === 'object' ? value : {}
+          const processes = Array.isArray(record.processes) ? record.processes : []
+          const count = Number.isFinite(record.count) ? record.count : processes.length
+          updateMonitorProcesses({
+            status: 'ready',
+            value: {
+              sampledAt: typeof record.sampledAt === 'string' ? record.sampledAt : '',
+              sort: typeof record.sort === 'string' ? record.sort : sort,
+              count,
+              processes,
+            },
+            error: null,
+          })
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          const current = snapshot.monitor.processes
+          if (failure.code === 'aborted') {
+            // The tab hid or unmounted: do not re-read for a pending sort
+            // change after the page went away.
+            aborted = true
+            updateMonitorProcesses({ status: current.value === null ? 'idle' : 'ready' })
+            return false
+          }
+          if (generation !== monitorProcessGeneration) return false
+          updateMonitorProcesses({
+            status: current.value === null ? 'error' : 'ready',
+            error: failure,
+          })
+          return false
+        }).then((result) => {
+          monitorProcessesRequest = null
+          if (aborted !== true) drainMonitorProcessesReload()
+          return result
+        }, (error) => {
+          monitorProcessesRequest = null
+          if (aborted !== true) drainMonitorProcessesReload()
+          throw error
+        })
+        monitorProcessesRequest = run
+        return run
+      }
+
+      /**
+       * Re-read the ranking when a sort change landed mid-flight, so the rows
+       * always match the selected sort instead of waiting for the next tick.
+       *
+       * @returns {void}
+       */
+      function drainMonitorProcessesReload() {
+        if (monitorProcessesReload !== true) return
+        monitorProcessesReload = false
+        if (snapshot.monitor.processes.open !== true) return
+        void loadMonitorProcesses()
+      }
+
+      /**
+       * Arm the inline "confirm?" state for one process.
+       *
+       * @param {number} pid - the target pid.
+       * @returns {void}
+       */
+      function armProcessKill(pid) {
+        const target = Number(pid)
+        if (!Number.isInteger(target) || target <= 1) return
+        const processes = snapshot.monitor.processes
+        updateMonitorProcesses({
+          armedPid: processes.armedPid === target ? null : target,
+          actionError: null,
+        })
+      }
+
+      /**
+       * Disarm the inline kill confirmation.
+       *
+       * @returns {void}
+       */
+      function cancelProcessKill() {
+        if (snapshot.monitor.processes.armedPid === null) return
+        updateMonitorProcesses({ armedPid: null })
+      }
+
+      /**
+       * Send SIGTERM to one process through the Host. Only an armed pid can be
+       * killed; pid 1 and invalid pids are refused locally, and the Host's
+       * documented error codes are the final authority.
+       *
+       * @param {number} pid - the target pid.
+       * @returns {Promise<boolean>} whether the process was signalled.
+       */
+      function killMonitorProcess(pid) {
+        const target = Number(pid)
+        const processes = snapshot.monitor.processes
+        if (processes.armedPid !== target) return Promise.resolve(false)
+        if (!Number.isInteger(target) || target <= 1) return Promise.resolve(false)
+        if (processes.killingPid !== null) return Promise.resolve(false)
+        updateMonitorProcesses({ armedPid: null, killingPid: target, actionError: null })
+        return host.post('monitorKill', { pid: target }).then(() => {
+          const current = snapshot.monitor.processes
+          const value = current.value
+          let nextValue = value
+          if (value !== null && typeof value === 'object' && Array.isArray(value.processes)) {
+            const rest = value.processes.filter((row) => row === null || typeof row !== 'object' || row.pid !== target)
+            nextValue = Object.assign({}, value, { processes: rest, count: rest.length })
+          }
+          updateMonitorProcesses({ killingPid: null, value: nextValue })
+          void loadMonitorProcesses()
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          updateMonitorProcesses({ killingPid: null, actionError: failure })
+          return false
+        })
+      }
+
+      /** Drop the last process-action failure. */
+      function dismissMonitorProcessError() {
+        if (snapshot.monitor.processes.actionError === null) return
+        updateMonitorProcesses({ actionError: null })
+      }
+
+      /**
+       * Extract a fanControl block from either a bare block (fan endpoints) or
+       * a `{ fanControl }` wrapper, defensively.
+       *
+       * @param {any} value - the Host answer.
+       * @returns {object|null} the fanControl block.
+       */
+      function fanBlockOf(value) {
+        if (value === null || typeof value !== 'object') return null
+        if (value.fanControl !== null && typeof value.fanControl === 'object') return value.fanControl
+        if (typeof value.state === 'string' && value.state !== '') return value
+        return null
+      }
+
+      /**
+       * Merge a fresh fanControl block into the last monitor snapshot.
+       *
+       * @param {any} value - a fan endpoint answer or the monitor snapshot.
+       * @returns {boolean} whether a block was adopted.
+       */
+      function adoptFanControl(value) {
+        const block = fanBlockOf(value)
+        if (block === null) return false
+        const monitor = snapshot.monitor
+        const current = monitor.value
+        if (current === null || typeof current !== 'object') {
+          updateMonitor({ value: { fanControl: block } })
+          return true
+        }
+        updateMonitor({ value: Object.assign({}, current, { fanControl: block }) })
+        return true
+      }
+
+      /**
+       * Merge a fresh preset list ({ presets: [...] }) into the last fan block.
+       *
+       * @param {any} value - the `fanPreset` answer.
+       * @returns {boolean} whether a list was adopted.
+       */
+      function adoptFanPresets(value) {
+        const presets = value !== null && typeof value === 'object' && Array.isArray(value.presets) ? value.presets : null
+        if (presets === null) return false
+        const monitor = snapshot.monitor
+        const current = monitor.value
+        if (current === null || typeof current !== 'object') return false
+        const fanControl = current.fanControl !== null && typeof current.fanControl === 'object'
+          ? Object.assign({}, current.fanControl, { presets })
+          : { presets }
+        updateMonitor({ value: Object.assign({}, current, { fanControl }) })
+        return true
+      }
+
+      /**
+       * Install the privileged fan helper. Blocking: the Host compiles the
+       * Swift helper once and asks for the administrator password; the pending
+       * flag drives the "waiting for authorization" card the whole time.
+       *
+       * @returns {Promise<boolean>} whether fan control is ready afterwards.
+       */
+      function fanInstall() {
+        if (snapshot.monitor.fan.pending !== null) return Promise.resolve(false)
+        updateMonitorFan({ pending: 'install', error: null })
+        return host.post('fanInstall', {}).then((value) => {
+          adoptFanControl(value)
+          updateMonitorFan({ pending: null, error: null })
+          void loadMonitor()
+          return true
+        }).catch((error) => {
+          updateMonitorFan({ pending: null, error: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Remove the privileged fan helper (the Host restores system auto first).
+       *
+       * @returns {Promise<boolean>} whether the helper was removed.
+       */
+      function fanUninstall() {
+        if (snapshot.monitor.fan.pending !== null) return Promise.resolve(false)
+        updateMonitorFan({ pending: 'uninstall', error: null })
+        return host.post('fanUninstall', {}).then((value) => {
+          adoptFanControl(value)
+          updateMonitorFan({ pending: null, error: null })
+          void loadMonitor()
+          return true
+        }).catch((error) => {
+          updateMonitorFan({ pending: null, error: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Take fan control: exactly one of the documented payload shapes.
+       * A release that lands while another write is in flight is queued, and
+       * the newest one wins (the slider releases faster than the round trip).
+       *
+       * @param {{ mode: string, rpm?: number, sensor?: string, points?: object[] }} payload - the fanApply payload.
+       * @returns {Promise<boolean>} whether the Host accepted the write.
+       */
+      function fanApply(payload) {
+        const request = payload !== null && typeof payload === 'object' ? payload : null
+        if (request === null) return Promise.resolve(false)
+        const fan = snapshot.monitor.fan
+        if (fan.pending === 'install' || fan.pending === 'uninstall') return Promise.resolve(false)
+        if (fan.pending !== null) {
+          pendingFanApply = request
+          return Promise.resolve(false)
+        }
+        updateMonitorFan({ pending: 'apply', error: null })
+        const run = host.post('fanApply', request).then((value) => {
+          adoptFanControl(value)
+          updateMonitorFan({ pending: null, error: null })
+          return true
+        }).catch((error) => {
+          updateMonitorFan({ pending: null, error: describeFailure(error) })
+          return false
+        }).then((result) => {
+          drainPendingFanApply()
+          return result
+        })
+        return run
+      }
+
+      /**
+       * Send the newest queued fan write (if any) once the fan state is idle
+       * again. The slider releases faster than the round trip, so a release
+       * that lands mid-write replaces any earlier queued release.
+       *
+       * @returns {void}
+       */
+      function drainPendingFanApply() {
+        if (pendingFanApply === null) return
+        if (snapshot.monitor.fan.pending !== null) return
+        const next = pendingFanApply
+        pendingFanApply = null
+        void fanApply(next)
+      }
+
+      /**
+       * Save the current manual/curve draft as a custom preset.
+       *
+       * @param {{ name: string, mode: string, rpm?: number, sensor?: string, points?: object[] }} draft - the preset.
+       * @returns {Promise<boolean>} whether it was saved.
+       */
+      function fanSavePreset(draft) {
+        if (snapshot.monitor.fan.pending !== null) return Promise.resolve(false)
+        const source = draft !== null && typeof draft === 'object' ? draft : {}
+        const name = typeof source.name === 'string' ? source.name.trim() : ''
+        const mode = source.mode === 'curve' ? 'curve' : (source.mode === 'manual' ? 'manual' : '')
+        if (name === '' || mode === '') {
+          const error = new Error('a preset needs a name and a manual or curve mode')
+          error.code = 'invalid_request'
+          error.details = {}
+          updateMonitorFan({ error: describeFailure(error) })
+          return Promise.resolve(false)
+        }
+        const payload = { op: 'save', name, mode }
+        if (mode === 'manual') payload.rpm = Number(source.rpm)
+        if (mode === 'curve') {
+          payload.sensor = typeof source.sensor === 'string' ? source.sensor : ''
+          payload.points = Array.isArray(source.points) ? source.points : []
+        }
+        updateMonitorFan({ pending: 'preset', error: null })
+        return host.post('fanPreset', payload).then((value) => {
+          adoptFanPresets(value)
+          updateMonitorFan({ pending: null, error: null })
+          drainPendingFanApply()
+          return true
+        }).catch((error) => {
+          updateMonitorFan({ pending: null, error: describeFailure(error) })
+          drainPendingFanApply()
+          return false
+        })
+      }
+
+      /**
+       * Delete one custom preset.
+       *
+       * @param {string} id - the preset id.
+       * @returns {Promise<boolean>} whether it was deleted.
+       */
+      function fanDeletePreset(id) {
+        if (snapshot.monitor.fan.pending !== null) return Promise.resolve(false)
+        const presetId = String(id)
+        if (presetId === '') return Promise.resolve(false)
+        updateMonitorFan({ pending: 'preset', error: null })
+        return host.post('fanPreset', { op: 'delete', id: presetId }).then((value) => {
+          adoptFanPresets(value)
+          updateMonitorFan({ pending: null, error: null })
+          drainPendingFanApply()
+          return true
+        }).catch((error) => {
+          updateMonitorFan({ pending: null, error: describeFailure(error) })
+          drainPendingFanApply()
+          return false
+        })
+      }
+
+      /** Drop the last fan failure notice. */
+      function dismissFanError() {
+        if (snapshot.monitor.fan.error === null) return
+        updateMonitorFan({ error: null })
+      }
+
+      /**
+       * Merge an alerts block ({ settings, events }) into the last snapshot.
+       *
+       * @param {any} value - the monitorAlertSave answer.
+       * @returns {object|null} the normalized settings.
+       */
+      function adoptMonitorAlerts(value) {
+        const record = value !== null && typeof value === 'object' ? value : null
+        if (record === null) return null
+        const settings = record.settings !== null && typeof record.settings === 'object' ? record.settings : null
+        if (settings === null) return null
+        const events = Array.isArray(record.events) ? record.events : []
+        const monitor = snapshot.monitor
+        const current = monitor.value
+        if (current !== null && typeof current === 'object') {
+          updateMonitor({ value: Object.assign({}, current, { alerts: { settings, events } }) })
+        }
+        return settings
+      }
+
+      /**
+       * Persist threshold settings through the Host (the Host clamps values).
+       *
+       * @param {object} patch - any subset of the alert settings.
+       * @returns {Promise<{ok:boolean, settings:object|null, error:object|null}>} the result.
+       */
+      function saveMonitorAlerts(patch) {
+        if (monitorAlertSaveRequest !== null) return monitorAlertSaveRequest
+        const request = patch !== null && typeof patch === 'object' ? patch : {}
+        updateMonitorAlerts({ saving: true, error: null })
+        const run = host.post('monitorAlertSave', request).then((value) => {
+          const settings = adoptMonitorAlerts(value)
+          updateMonitorAlerts({ saving: false, error: null })
+          return { ok: true, settings, error: null }
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          updateMonitorAlerts({ saving: false, error: failure })
+          return { ok: false, settings: null, error: failure }
+        }).then((result) => {
+          monitorAlertSaveRequest = null
+          return result
+        }, (error) => {
+          monitorAlertSaveRequest = null
+          throw error
+        })
+        monitorAlertSaveRequest = run
+        return run
+      }
+
+      /**
+       * Fire one test notification through the Host.
+       *
+       * @returns {Promise<{ok:boolean, notified:boolean, error:object|null}>} the result.
+       */
+      function testMonitorAlerts() {
+        if (monitorAlertTestRequest !== null) return monitorAlertTestRequest
+        updateMonitorAlerts({ testing: true, error: null })
+        const run = host.post('monitorAlertTest', {}).then((value) => {
+          updateMonitorAlerts({ testing: false, error: null })
+          return {
+            ok: true,
+            notified: value !== null && typeof value === 'object' && value.notified === true,
+            error: null,
+          }
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          updateMonitorAlerts({ testing: false, error: failure })
+          return { ok: false, notified: false, error: failure }
+        }).then((result) => {
+          monitorAlertTestRequest = null
+          return result
+        }, (error) => {
+          monitorAlertTestRequest = null
+          throw error
+        })
+        monitorAlertTestRequest = run
+        return run
+      }
+
+      /** Drop the last alert failure notice. */
+      function dismissMonitorAlertsError() {
+        if (snapshot.monitor.alerts.error === null) return
+        updateMonitorAlerts({ error: null })
+      }
+
       return {
         /** @returns {object} the current snapshot. */
         getSnapshot: () => snapshot,
@@ -3229,6 +5017,26 @@ window.__ModuleLoader__.load({
         copyHistory,
         pollPendingEditor,
         historyImageUrl,
+        loadMonitor,
+        refreshMonitor,
+        setMonitorInterval,
+        setMonitorPaused,
+        toggleMonitorProcesses,
+        setMonitorProcessSort,
+        loadMonitorProcesses,
+        armProcessKill,
+        cancelProcessKill,
+        killMonitorProcess,
+        dismissMonitorProcessError,
+        fanInstall,
+        fanUninstall,
+        fanApply,
+        fanSavePreset,
+        fanDeletePreset,
+        dismissFanError,
+        saveMonitorAlerts,
+        testMonitorAlerts,
+        dismissMonitorAlertsError,
         loadTransferStatus,
         startTransfer,
         stopTransfer,
@@ -5446,6 +7254,1870 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Live status tab
+    // ---------------------------------------------------------------------
+
+    /**
+     * One reusable sparkline. Series colours are the only literal colours in
+     * the chart; the card chrome stays on theme tokens. Non-finite values are
+     * skipped, so `history.cpuTemperature` may hold null points.
+     *
+     * @param {object} props - series, optional fixed domain, height and label.
+     * @returns {object} the `<svg>` element.
+     */
+    function MonitorSparkline({ series, fixedMin, fixedMax, tall, ariaLabel }) {
+      const groups = Array.isArray(series) ? series : []
+      const bounds = monitorSeriesBounds(groups.map((group) => group.points), fixedMin, fixedMax)
+      const width = 240
+      const height = tall === true ? 52 : 40
+      const paths = groups.map((group, index) => {
+        const geometry = monitorSparklineGeometry(group.points, bounds.min, bounds.max, width, height)
+        const nodes = []
+        if (group.area === true && geometry.area !== '') {
+          nodes.push(h('path', {
+            key: 'area',
+            className: 'dshMacToolsMonitorSparkArea',
+            d: geometry.area,
+            style: { fill: group.color },
+            'vector-effect': 'non-scaling-stroke',
+          }))
+        }
+        if (geometry.line !== '') {
+          nodes.push(h('path', {
+            key: 'line',
+            className: 'dshMacToolsMonitorSparkLine',
+            d: geometry.line,
+            style: { stroke: group.color },
+            'vector-effect': 'non-scaling-stroke',
+          }))
+        }
+        return nodes
+      })
+      const labelled = typeof ariaLabel === 'string' && ariaLabel !== ''
+      return h('svg', {
+        className: tall === true ? 'dshMacToolsMonitorSparkline dshMacToolsMonitorSparklineTall' : 'dshMacToolsMonitorSparkline',
+        viewBox: `0 0 ${width} ${height}`,
+        preserveAspectRatio: 'none',
+        role: labelled ? 'img' : 'presentation',
+        'aria-label': labelled ? ariaLabel : undefined,
+        'aria-hidden': labelled ? undefined : true,
+        focusable: false,
+      }, paths)
+    }
+
+    /**
+     * One overview card. Reuses the system tab's card surface so the panel
+     * keeps a single visual language.
+     *
+     * @param {object} props - title, optional meta node, wide flag, children.
+     * @returns {object} the element.
+     */
+    function MonitorCard({ title, meta, wide, children }) {
+      return h('section', {
+        className: wide === true ? 'dshMacToolsCard dshMacToolsMonitorCardWide' : 'dshMacToolsCard',
+      }, [
+        h('div', { key: 'head', className: 'dshMacToolsMonitorCardHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsMonitorCardTitle' }, title),
+          meta === undefined || meta === null
+            ? null
+            : h('div', { key: 'meta', className: 'dshMacToolsMonitorCardMeta' }, meta),
+        ]),
+        h('div', { key: 'body', className: 'dshMacToolsCardBody' }, children),
+      ])
+    }
+
+    /**
+     * One legend dot for a chart series.
+     *
+     * @param {string} color - the series colour.
+     * @returns {object} the element.
+     */
+    function MonitorLegendDot({ color }) {
+      return h('span', {
+        className: 'dshMacToolsMonitorLegendDot',
+        style: { background: color },
+        'aria-hidden': true,
+      })
+    }
+
+    /**
+     * The per-core mini bars.
+     *
+     * @param {object} props - translator and the perCorePercent array.
+     * @returns {object|null} the element, or null when the Host sent no core data.
+     */
+    function MonitorCores({ t, cores }) {
+      const list = Array.isArray(cores) ? cores : []
+      if (list.length === 0) return null
+      return h('div', {
+        className: 'dshMacToolsMonitorCoreBars',
+        role: 'img',
+        'aria-label': t('monitor.cpu.perCore'),
+      }, list.map((value, index) => {
+        const percent = clampNumber(Number.isFinite(value) ? value : 0, 0, 100)
+        return h('span', {
+          key: `core-${index}`,
+          className: 'dshMacToolsMonitorCoreBar',
+          title: t('monitor.cpu.coreAria', { index: index + 1, value: formatPercent(percent) }),
+        }, h('span', { className: 'dshMacToolsMonitorCoreFill', style: { height: `${percent}%` } }))
+      }))
+    }
+
+    /**
+     * 温度传感器 — the summary chips plus the collapsible all-sensors list
+     * grouped by SMC key family and sorted by temperature desc.
+     *
+     * @param {object} props - translator and the sample's sensors block.
+     * @returns {object} the section element.
+     */
+    function MonitorSensorsSection({ t, sensors }) {
+      const [open, setOpen] = React.useState(false)
+      const block = sensors !== null && typeof sensors === 'object' ? sensors : {}
+      const available = block.available === true
+      const groups = block.groups !== null && typeof block.groups === 'object' ? block.groups : {}
+      const readings = Array.isArray(block.readings) ? block.readings : []
+
+      const chips = []
+      for (let index = 0; index < MONITOR_SENSOR_GROUPS.length; index += 1) {
+        const id = MONITOR_SENSOR_GROUPS[index][0]
+        const key = MONITOR_SENSOR_GROUPS[index][1]
+        const value = groups[id]
+        if (!Number.isFinite(value)) continue
+        chips.push(h('li', { key: id, className: 'dshMacToolsMonitorChip' }, [
+          h('span', { key: 'label', className: 'dshMacToolsMonitorChipLabel' }, t(key)),
+          h('span', { key: 'value', className: 'dshMacToolsMonitorChipValue' }, monitorCelsiusText(value)),
+        ]))
+      }
+      const families = monitorSensorFamilies(readings)
+
+      let statusLine = null
+      if (available !== true) {
+        statusLine = h('div', { key: 'status', className: 'dshMacToolsNotice', role: 'status' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+          h('p', { key: 'text' }, monitorSensorReasonText(t, block.reason)),
+        ])
+      } else if (chips.length === 0 && families.length === 0) {
+        statusLine = h('p', { key: 'empty', className: 'dshMacToolsMonitorMuted' }, t('monitor.sensors.empty'))
+      }
+
+      const summary = available === true && chips.length > 0
+        ? h('ul', {
+          key: 'summary',
+          className: 'dshMacToolsMonitorChips',
+          'aria-label': t('monitor.sensors.summaryAria'),
+        }, chips)
+        : null
+
+      const allSensors = available === true && families.length > 0 && open === true
+        ? h('div', { key: 'all', className: 'dshMacToolsMonitorSensorList' }, families.map((family) => h('div', {
+          key: `family-${family.family}`,
+          className: 'dshMacToolsMonitorSensorFamily',
+        }, [
+          h('p', { key: 'head', className: 'dshMacToolsMonitorSensorFamilyHead' }, [
+            h('span', { key: 'name' }, family.family),
+            h('span', {
+              key: 'count',
+              className: 'dshMacToolsMonitorSensorFamilyMeta',
+            }, t('monitor.sensors.familyCount', { count: family.readings.length })),
+          ]),
+          h('ul', { key: 'rows', className: 'dshMacToolsMonitorSensorRows' }, family.readings.map((reading) => h('li', {
+            key: `${family.family}-${reading.key}`,
+            className: 'dshMacToolsMonitorSensorRow',
+            title: t('monitor.sensors.readingAria', { key: reading.key, value: monitorCelsiusText(reading.celsius) }),
+          }, [
+            h('span', { key: 'key', className: 'dshMacToolsMonitorSensorKey' }, reading.key),
+            h('span', { key: 'value', className: 'dshMacToolsMonitorSensorValue' }, monitorCelsiusText(reading.celsius)),
+          ]))),
+        ])))
+        : null
+
+      const actions = available === true && families.length > 0
+        ? h('div', { key: 'actions', className: 'dshMacToolsMonitorSectionActions' }, h('button', {
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          'aria-expanded': open,
+          onClick: () => setOpen(!open),
+        }, open ? t('monitor.sensors.hideAll') : t('monitor.sensors.showAll')))
+        : null
+
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.sensors.title'),
+      }, [
+        h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.sensors.title')),
+          readings.length === 0
+            ? null
+            : h('span', { key: 'count', className: 'dshMacToolsMonitorSectionMeta' }, t('monitor.sensors.count', { count: readings.length })),
+          actions,
+        ]),
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [statusLine, summary, allSensors]),
+      ])
+    }
+
+    /**
+     * The SVG fan-curve editor: 2…8 points joined by straight segments. Drag a
+     * point to change its temperature (kept strictly between its neighbours)
+     * and speed; click empty space to add one; the selected point can be
+     * deleted, and the whole curve can be reset to the default.
+     *
+     * @param {object} props - translator, points, fan range, disabled, change/commit callbacks.
+     * @returns {object} the editor element.
+     */
+    function MonitorCurveChart({ t, points, minRpm, maxRpm, disabled, onChange, onCommit }) {
+      const [selected, setSelected] = React.useState(-1)
+      const svgRef = React.useRef(null)
+      const dragRef = React.useRef(null)
+      const low = Number.isFinite(minRpm) ? minRpm : 1000
+      const high = Number.isFinite(maxRpm) && maxRpm > low ? maxRpm : low + 3000
+      const list = Array.isArray(points) ? points : []
+
+      const toX = (celsius) => {
+        const span = MONITOR_CURVE_MAX_CELSIUS - MONITOR_CURVE_MIN_CELSIUS
+        return ((clampNumber(celsius, MONITOR_CURVE_MIN_CELSIUS, MONITOR_CURVE_MAX_CELSIUS) - MONITOR_CURVE_MIN_CELSIUS) / span) * MONITOR_CURVE_WIDTH
+      }
+      const toY = (rpm) => MONITOR_CURVE_HEIGHT - ((clampNumber(rpm, low, high) - low) / (high - low)) * MONITOR_CURVE_HEIGHT
+
+      /**
+       * Map a pointer event to viewBox coordinates through the element rect.
+       *
+       * @param {object} event - the pointer event.
+       * @returns {{x:number,y:number}|null} the position.
+       */
+      const pointerPosition = (event) => {
+        const node = svgRef.current
+        if (node === null || node === undefined || typeof node.getBoundingClientRect !== 'function') return null
+        const rect = node.getBoundingClientRect()
+        const width = Math.max(1, rect.width)
+        const height = Math.max(1, rect.height)
+        return {
+          x: clampNumber(((event.clientX - rect.left) / width) * MONITOR_CURVE_WIDTH, 0, MONITOR_CURVE_WIDTH),
+          y: clampNumber(((event.clientY - rect.top) / height) * MONITOR_CURVE_HEIGHT, 0, MONITOR_CURVE_HEIGHT),
+        }
+      }
+      const positionToCelsius = (position) => MONITOR_CURVE_MIN_CELSIUS
+        + (position.x / MONITOR_CURVE_WIDTH) * (MONITOR_CURVE_MAX_CELSIUS - MONITOR_CURVE_MIN_CELSIUS)
+      const positionToRpm = (position) => high - (position.y / MONITOR_CURVE_HEIGHT) * (high - low)
+
+      const handlePointerDown = (event) => {
+        if (disabled === true) return
+        const position = pointerPosition(event)
+        if (position === null) return
+        let hit = -1
+        for (let index = 0; index < list.length; index += 1) {
+          const dx = toX(list[index].celsius) - position.x
+          const dy = toY(list[index].rpm) - position.y
+          if (Math.hypot(dx, dy) <= 10) {
+            hit = index
+            break
+          }
+        }
+        if (hit < 0) {
+          if (list.length >= MONITOR_CURVE_MAX_POINTS) return
+          const celsius = Math.round(positionToCelsius(position) * 10) / 10
+          const rpm = Math.round(positionToRpm(position))
+          // Keep at least one degree between nodes so a click next to an
+          // existing point cannot make the two impossible to drag apart.
+          for (let index = 0; index < list.length; index += 1) {
+            if (Math.abs(list[index].celsius - celsius) < 1) return
+          }
+          const next = list.concat([{ celsius, rpm }]).sort((left, right) => left.celsius - right.celsius)
+          hit = next.findIndex((point) => point.celsius === celsius && point.rpm === rpm)
+          onChange(next)
+        }
+        setSelected(hit)
+        dragRef.current = { index: hit }
+        const target = event.currentTarget
+        if (target !== null && target !== undefined && typeof target.setPointerCapture === 'function' && typeof event.pointerId === 'number') {
+          try {
+            target.setPointerCapture(event.pointerId)
+          } catch (error) {
+            // Pointer capture is optional; the drag still works without it.
+          }
+        }
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+      }
+
+      const handlePointerMove = (event) => {
+        const drag = dragRef.current
+        if (drag === null || disabled === true) return
+        const index = drag.index
+        if (!Number.isInteger(index) || index < 0 || index >= list.length) return
+        const position = pointerPosition(event)
+        if (position === null) return
+        const minimum = index > 0 ? list[index - 1].celsius + 1 : MONITOR_CURVE_MIN_CELSIUS
+        const maximum = index < list.length - 1 ? list[index + 1].celsius - 1 : MONITOR_CURVE_MAX_CELSIUS
+        if (minimum > maximum) return
+        const celsius = Math.round(clampNumber(positionToCelsius(position), minimum, maximum) * 10) / 10
+        const rpm = Math.round(clampNumber(positionToRpm(position), low, high))
+        const next = list.map((point, pointIndex) => (pointIndex === index ? { celsius, rpm } : point))
+        onChange(next)
+      }
+
+      const handlePointerUp = () => {
+        if (dragRef.current === null) return
+        dragRef.current = null
+        if (typeof onCommit === 'function') onCommit()
+      }
+
+      const selectedPoint = Number.isInteger(selected) && selected >= 0 && selected < list.length ? list[selected] : null
+      const curvePath = list
+        .map((point, index) => `${index === 0 ? 'M' : 'L'}${toX(point.celsius).toFixed(2)},${toY(point.rpm).toFixed(2)}`)
+        .join(' ')
+      const areaPath = list.length >= 2
+        ? `${curvePath} L${toX(list[list.length - 1].celsius).toFixed(2)},${MONITOR_CURVE_HEIGHT} L${toX(list[0].celsius).toFixed(2)},${MONITOR_CURVE_HEIGHT} Z`
+        : ''
+
+      const grid = []
+      for (let index = 0; index <= 4; index += 1) {
+        const ratio = index / 4
+        grid.push(h('line', {
+          key: `h-${index}`,
+          className: 'dshMacToolsMonitorCurveGrid',
+          x1: 0,
+          y1: MONITOR_CURVE_HEIGHT * ratio,
+          x2: MONITOR_CURVE_WIDTH,
+          y2: MONITOR_CURVE_HEIGHT * ratio,
+        }))
+        grid.push(h('line', {
+          key: `v-${index}`,
+          className: 'dshMacToolsMonitorCurveGrid',
+          x1: MONITOR_CURVE_WIDTH * ratio,
+          y1: 0,
+          x2: MONITOR_CURVE_WIDTH * ratio,
+          y2: MONITOR_CURVE_HEIGHT,
+        }))
+      }
+      const ticks = []
+      for (let index = 0; index <= 4; index += 1) {
+        const ratio = index / 4
+        ticks.push(h('text', {
+          key: `rpm-${index}`,
+          className: 'dshMacToolsMonitorCurveAxis',
+          x: 3,
+          y: Math.min(MONITOR_CURVE_HEIGHT - 2, MONITOR_CURVE_HEIGHT * ratio + 9),
+        }, String(Math.round(high - ratio * (high - low)))))
+        ticks.push(h('text', {
+          key: `celsius-${index}`,
+          className: 'dshMacToolsMonitorCurveAxis',
+          x: clampNumber(ratio * MONITOR_CURVE_WIDTH + (index === 0 ? 2 : -14), 0, MONITOR_CURVE_WIDTH - 14),
+          y: MONITOR_CURVE_HEIGHT - 2,
+        }, String(Math.round(MONITOR_CURVE_MIN_CELSIUS + ratio * (MONITOR_CURVE_MAX_CELSIUS - MONITOR_CURVE_MIN_CELSIUS)))))
+      }
+      const pointNodes = list.map((point, index) => h('circle', {
+        key: `point-${index}`,
+        className: index === selected
+          ? 'dshMacToolsMonitorCurvePoint dshMacToolsMonitorCurvePointActive'
+          : 'dshMacToolsMonitorCurvePoint',
+        cx: toX(point.celsius),
+        cy: toY(point.rpm),
+        r: index === selected ? 6 : 4.5,
+      }))
+
+      const deletePoint = () => {
+        if (selectedPoint === null || list.length <= MONITOR_CURVE_MIN_POINTS) return
+        const next = list.filter((point, index) => index !== selected)
+        setSelected(-1)
+        onChange(next)
+        if (typeof onCommit === 'function') onCommit()
+      }
+      const resetCurve = () => {
+        setSelected(-1)
+        onChange(monitorDefaultCurve(low, high))
+        if (typeof onCommit === 'function') onCommit()
+      }
+
+      const chart = h('svg', {
+        key: 'chart',
+        ref: svgRef,
+        className: 'dshMacToolsMonitorCurveSvg',
+        viewBox: `0 0 ${MONITOR_CURVE_WIDTH} ${MONITOR_CURVE_HEIGHT}`,
+        role: 'img',
+        'aria-label': t('monitor.fan.curve.hint'),
+        onPointerDown: handlePointerDown,
+        onPointerMove: handlePointerMove,
+        onPointerUp: handlePointerUp,
+        onPointerCancel: handlePointerUp,
+      }, [
+        h('g', { key: 'grid' }, grid),
+        areaPath === '' ? null : h('path', { key: 'area', className: 'dshMacToolsMonitorCurveArea', d: areaPath }),
+        h('path', { key: 'line', className: 'dshMacToolsMonitorCurveLine', d: curvePath }),
+        h('g', { key: 'ticks' }, ticks),
+        h('g', { key: 'points' }, pointNodes),
+      ])
+
+      const bar = h('div', { key: 'bar', className: 'dshMacToolsMonitorCurveBar' }, [
+        h('p', { key: 'meta', className: 'dshMacToolsMonitorCurveMeta' }, selectedPoint === null
+          ? t('monitor.fan.curve.points', { count: list.length })
+          : t('monitor.fan.curve.point', { celsius: selectedPoint.celsius.toFixed(1), rpm: Math.round(selectedPoint.rpm) })),
+        h('button', {
+          key: 'delete',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+          disabled: disabled === true || selectedPoint === null || list.length <= MONITOR_CURVE_MIN_POINTS,
+          onClick: deletePoint,
+        }, t('monitor.fan.curve.delete')),
+        h('button', {
+          key: 'reset',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          disabled: disabled === true,
+          onClick: resetCurve,
+        }, t('monitor.fan.curve.reset')),
+        h('button', {
+          key: 'apply',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonPrimary',
+          disabled: disabled === true || list.length < MONITOR_CURVE_MIN_POINTS,
+          onClick: () => {
+            if (typeof onCommit === 'function') onCommit()
+          },
+        }, t('monitor.fan.curve.apply')),
+      ])
+
+      return h('div', { className: 'dshMacToolsMonitorCurveBox' }, [
+        chart,
+        bar,
+        h('p', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.curve.hint')),
+      ])
+    }
+
+    /**
+     * 风扇控制. Renders the install CTA / status card / ready-state controls
+     * (per-fan readings, auto/manual/curve modes, manual slider committed on
+     * release, the curve editor, presets and uninstall), exactly per §5.
+     *
+     * @param {object} props - store, snapshot and translator.
+     * @returns {object} the section element.
+     */
+    function MonitorFanSection({ store, snapshot, t }) {
+      const monitor = snapshot.monitor
+      const value = monitor.value
+      const fanState = monitor.fan
+      const pending = fanState.pending
+      const fanError = fanState.error
+      const [manualRpm, setManualRpm] = React.useState(null)
+      const manualRef = React.useRef(null)
+      const [curveDraft, setCurveDraft] = React.useState(null)
+      const curveRef = React.useRef(null)
+      const [presetName, setPresetName] = React.useState('')
+      const [presetNotice, setPresetNotice] = React.useState('')
+      const [confirmUninstall, setConfirmUninstall] = React.useState(false)
+      const commitTimer = React.useRef(null)
+
+      const fanControl = value !== null && typeof value === 'object'
+        && value.fanControl !== null && typeof value.fanControl === 'object'
+        ? value.fanControl
+        : null
+      const sample = value !== null && typeof value === 'object' && value.sample !== null && typeof value.sample === 'object'
+        ? value.sample
+        : {}
+      const fansBlock = sample.fans !== null && typeof sample.fans === 'object' ? sample.fans : null
+      const fanItems = fansBlock !== null && Array.isArray(fansBlock.items) ? fansBlock.items : []
+      const ready = fanControl !== null && fanControl.state === 'ready'
+      const installed = fanControl !== null && fanControl.installed === true
+      const minRpm = fanControl !== null && Number.isFinite(fanControl.minRpm) ? fanControl.minRpm : 1000
+      const maxRpm = fanControl !== null && Number.isFinite(fanControl.maxRpm) && fanControl.maxRpm > minRpm
+        ? fanControl.maxRpm
+        : minRpm + 3000
+      const busyInstall = pending === 'install' || pending === 'uninstall'
+      const controlsDisabled = busyInstall === true
+
+      // Seed the editable drafts from the Host's applied state. The signatures
+      // change only when the Host's value changes, so a poll every second never
+      // clobbers what the operator is dragging.
+      const curveSignature = ready && fanControl.curve !== null && typeof fanControl.curve === 'object'
+        ? JSON.stringify(fanControl.curve)
+        : ''
+      React.useEffect(() => {
+        if (ready !== true || fanControl.curve === null || typeof fanControl.curve !== 'object') return
+        const seeded = monitorSanitizeCurve(fanControl.curve, minRpm, maxRpm)
+        const next = {
+          sensor: seeded.sensor,
+          points: seeded.points.length >= MONITOR_CURVE_MIN_POINTS ? seeded.points : monitorDefaultCurve(minRpm, maxRpm),
+        }
+        setCurveDraft(next)
+        curveRef.current = next
+      }, [curveSignature])
+
+      const manualSignature = ready && Number.isFinite(fanControl.manualRpm) ? `${fanControl.mode}:${fanControl.manualRpm}` : ''
+      React.useEffect(() => {
+        if (ready !== true || !Number.isFinite(fanControl.manualRpm)) return
+        const next = clampNumber(fanControl.manualRpm, minRpm, maxRpm)
+        setManualRpm(next)
+        manualRef.current = next
+      }, [manualSignature])
+
+      React.useEffect(() => () => {
+        if (commitTimer.current !== null) clearTimeout(commitTimer.current)
+      }, [])
+
+      React.useEffect(() => {
+        if (presetNotice === '') return undefined
+        const timer = setTimeout(() => setPresetNotice(''), MONITOR_ALERT_NOTICE_MS)
+        return () => clearTimeout(timer)
+      }, [presetNotice])
+
+      React.useEffect(() => {
+        if (confirmUninstall !== true) return undefined
+        const timer = setTimeout(() => setConfirmUninstall(false), MONITOR_KILL_ARM_MS)
+        return () => clearTimeout(timer)
+      }, [confirmUninstall])
+
+      const fallbackCurve = () => {
+        const source = fanControl !== null && fanControl.curve !== null && typeof fanControl.curve === 'object'
+          ? fanControl.curve
+          : null
+        const seeded = monitorSanitizeCurve(source, minRpm, maxRpm)
+        return {
+          sensor: seeded.sensor,
+          points: seeded.points.length >= MONITOR_CURVE_MIN_POINTS ? seeded.points : monitorDefaultCurve(minRpm, maxRpm),
+        }
+      }
+      const effectiveCurve = curveDraft !== null ? curveDraft : fallbackCurve()
+      const effectiveManual = manualRpm !== null
+        ? manualRpm
+        : (ready && Number.isFinite(fanControl.manualRpm) ? clampNumber(fanControl.manualRpm, minRpm, maxRpm) : minRpm)
+
+      const scheduleApply = (payload) => {
+        if (commitTimer.current !== null) clearTimeout(commitTimer.current)
+        commitTimer.current = setTimeout(() => {
+          commitTimer.current = null
+          void store.fanApply(payload)
+        }, MONITOR_FAN_DEBOUNCE_MS)
+      }
+      const commitManual = () => {
+        const rpm = Math.round(Number(manualRef.current === null ? effectiveManual : manualRef.current))
+        if (!Number.isFinite(rpm)) return
+        scheduleApply({ mode: 'manual', rpm: clampNumber(rpm, minRpm, maxRpm) })
+      }
+      const commitCurve = () => {
+        const draft = curveRef.current !== null ? curveRef.current : effectiveCurve
+        if (draft === null) return
+        scheduleApply({
+          mode: 'curve',
+          sensor: draft.sensor,
+          points: draft.points.map((point) => ({ celsius: point.celsius, rpm: Math.round(point.rpm) })),
+        })
+      }
+      const handleCurveChange = (nextPoints) => {
+        if (!Array.isArray(nextPoints)) return
+        const sensor = curveRef.current !== null ? curveRef.current.sensor : effectiveCurve.sensor
+        const next = { sensor, points: nextPoints }
+        setCurveDraft(next)
+        curveRef.current = next
+      }
+      const handleManualChange = (event) => {
+        const next = Number(event.target.value)
+        if (!Number.isFinite(next)) return
+        setManualRpm(next)
+        manualRef.current = next
+      }
+      const handleSensorChange = (event) => {
+        const sensor = typeof event.target.value === 'string' ? event.target.value : effectiveCurve.sensor
+        const next = { sensor, points: effectiveCurve.points }
+        setCurveDraft(next)
+        curveRef.current = next
+      }
+      const applyMode = (mode) => {
+        if (ready !== true || pending !== null) return
+        if (mode === 'auto') {
+          void store.fanApply({ mode: 'auto' })
+          return
+        }
+        const draft = curveRef.current !== null ? curveRef.current : effectiveCurve
+        if (mode === 'manual') {
+          const rpm = Math.round(Number(manualRef.current === null ? effectiveManual : manualRef.current))
+          void store.fanApply({ mode: 'manual', rpm: clampNumber(Number.isFinite(rpm) ? rpm : effectiveManual, minRpm, maxRpm) })
+          return
+        }
+        void store.fanApply({
+          mode: 'curve',
+          sensor: draft.sensor,
+          points: draft.points.map((point) => ({ celsius: point.celsius, rpm: Math.round(point.rpm) })),
+        })
+      }
+      const applyPreset = (preset) => {
+        if (preset === null || typeof preset !== 'object' || pending !== null) return
+        if (preset.mode === 'auto') {
+          void store.fanApply({ mode: 'auto' })
+          return
+        }
+        if (preset.mode === 'manual' && Number.isFinite(preset.rpm)) {
+          void store.fanApply({ mode: 'manual', rpm: preset.rpm })
+          return
+        }
+        if (preset.mode === 'curve' && preset.curve !== null && typeof preset.curve === 'object') {
+          const points = Array.isArray(preset.curve.points) ? preset.curve.points : []
+          void store.fanApply({
+            mode: 'curve',
+            sensor: typeof preset.curve.sensor === 'string' ? preset.curve.sensor : effectiveCurve.sensor,
+            points,
+          })
+        }
+      }
+      const savePreset = () => {
+        if (ready !== true || pending !== null) return
+        const name = presetName.trim()
+        if (name === '') {
+          setPresetNotice(t('monitor.fan.preset.nameRequired'))
+          return
+        }
+        if (fanControl.mode === 'auto') {
+          setPresetNotice(t('monitor.fan.preset.invalid'))
+          return
+        }
+        setPresetNotice('')
+        const draft = fanControl.mode === 'curve'
+          ? {
+            name,
+            mode: 'curve',
+            sensor: effectiveCurve.sensor,
+            points: effectiveCurve.points.map((point) => ({ celsius: point.celsius, rpm: Math.round(point.rpm) })),
+          }
+          : { name, mode: 'manual', rpm: Math.round(effectiveManual) }
+        void store.fanSavePreset(draft).then((saved) => {
+          if (saved === true) {
+            setPresetName('')
+            setPresetNotice(t('monitor.fan.preset.saved'))
+          }
+        })
+      }
+      const requestUninstall = () => {
+        if (confirmUninstall === true) {
+          setConfirmUninstall(false)
+          void store.fanUninstall()
+          return
+        }
+        setConfirmUninstall(true)
+      }
+
+      const spinner = h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true })
+      const fanErrorNotice = fanError === null || fanError === undefined
+        ? null
+        : h('div', { key: 'fan-error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+          h('p', { key: 'text' }, monitorFanErrorText(t, fanError)),
+          h('button', {
+            key: 'dismiss',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => store.dismissFanError(),
+          }, t('common.dismiss')),
+        ])
+      const retryButton = h('button', {
+        key: 'retry',
+        type: 'button',
+        className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+        onClick: () => { void store.refreshMonitor() },
+      }, t('monitor.fan.retry'))
+      const uninstallButton = installed || ready
+        ? h('button', {
+          key: 'uninstall',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+          title: t('monitor.fan.uninstallHint'),
+          disabled: pending !== null,
+          onClick: requestUninstall,
+        }, pending === 'uninstall'
+          ? t('monitor.fan.uninstalling')
+          : confirmUninstall === true
+            ? t('monitor.fan.uninstallConfirm')
+            : t('monitor.fan.uninstall'))
+        : null
+      const otherControllers = fanControl !== null && Array.isArray(fanControl.otherControllers)
+        ? fanControl.otherControllers.filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.name === 'string' && entry.name !== '')
+        : []
+      const otherWarning = otherControllers.length === 0
+        ? null
+        : h('p', { key: 'other-controllers', className: 'dshMacToolsMonitorWarning', role: 'alert' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsMonitorWarningIcon', 'aria-hidden': true }, glyph('alert', 14)),
+          h('span', { key: 'text' }, t('monitor.fan.otherControllers', {
+            names: monitorNameListText(t, otherControllers.map((entry) => entry.name)),
+          })),
+        ])
+
+      const modeButtons = ['auto', 'manual', 'curve'].map((mode) => h('button', {
+        key: mode,
+        type: 'button',
+        className: fanControl !== null && fanControl.mode === mode
+          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
+          : 'dshMacToolsMonitorSegment',
+        'aria-pressed': fanControl !== null && fanControl.mode === mode,
+        disabled: ready !== true || pending !== null,
+        onClick: () => applyMode(mode),
+      }, monitorFanModeLabel(t, mode)))
+
+      const fanRows = fanItems.map((fan, index) => {
+        const fanIndex = Number.isFinite(fan.index) ? fan.index : index
+        const actual = monitorRpmText(fan.actualRpm)
+        const target = monitorRpmText(fan.targetRpm)
+        const low = Number.isFinite(fan.minRpm) ? Math.round(fan.minRpm) : Math.round(minRpm)
+        const high = Number.isFinite(fan.maxRpm) ? Math.round(fan.maxRpm) : Math.round(maxRpm)
+        return h('li', { key: `fan-${fanIndex}`, className: 'dshMacToolsMonitorFanRow' }, [
+          h('span', { key: 'name', className: 'dshMacToolsMonitorFanName' }, t('monitor.fan.fanName', { index: fanIndex + 1 })),
+          h('span', { key: 'actual', className: 'dshMacToolsMonitorFanMeta' }, t('monitor.fan.actual', { rpm: actual })),
+          h('span', { key: 'target', className: 'dshMacToolsMonitorFanHint' }, t('monitor.fan.target', { rpm: target })),
+          h('span', { key: 'range', className: 'dshMacToolsMonitorFanHint' }, t('monitor.fan.range', { min: low, max: high })),
+          h('span', { key: 'mode', className: 'dshMacToolsMonitorFanBadge' }, monitorFanItemModeLabel(t, typeof fan.mode === 'string' ? fan.mode : 'unknown')),
+        ])
+      })
+
+      const modeRow = h('div', { key: 'modes', className: 'dshMacToolsMonitorFanBar' }, [
+        h('span', { key: 'label', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.mode')),
+        h('div', { key: 'seg', className: 'dshMacToolsMonitorSegmented' }, modeButtons),
+        pending === 'apply' || pending === 'preset'
+          ? h('span', { key: 'busy', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.pendingApply'))
+          : null,
+      ])
+
+      const manualBlock = h('div', { key: 'manual', className: 'dshMacToolsMonitorSectionBody' }, [
+        h('div', { key: 'row', className: 'dshMacToolsMonitorSliderRow' }, [
+          h('span', { key: 'label', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.manual')),
+          h('input', {
+            key: 'slider',
+            type: 'range',
+            className: 'dshMacToolsMonitorSlider',
+            min: minRpm,
+            max: maxRpm,
+            step: 10,
+            value: Math.round(effectiveManual),
+            'aria-label': t('monitor.fan.manual'),
+            disabled: controlsDisabled,
+            onChange: handleManualChange,
+            onPointerUp: commitManual,
+            onKeyUp: commitManual,
+            onBlur: commitManual,
+          }),
+          h('span', {
+            key: 'value',
+            className: 'dshMacToolsMonitorSliderValue',
+          }, t('monitor.fan.manualValue', { rpm: Math.round(effectiveManual) })),
+        ]),
+        h('p', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.manualHint')),
+      ])
+
+      const sensorIds = fanControl !== null && Array.isArray(fanControl.sensorOptions) && fanControl.sensorOptions.length > 0
+        ? fanControl.sensorOptions
+        : Object.keys(MONITOR_SENSOR_GROUP_KEYS)
+      const sensorControl = h('div', { key: 'sensor', className: 'dshMacToolsMonitorFanBar' }, [
+        h('span', { key: 'label', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.curve.sensor')),
+        h('select', {
+          key: 'select',
+          className: 'dshMacToolsInput dshMacToolsMonitorPresetInput',
+          value: effectiveCurve.sensor,
+          'aria-label': t('monitor.fan.curve.sensor'),
+          disabled: controlsDisabled,
+          onChange: handleSensorChange,
+        }, sensorIds.map((id) => h('option', { key: String(id), value: String(id) }, monitorSensorGroupLabel(t, String(id))))),
+      ])
+
+      const curveBlock = h('div', { key: 'curve', className: 'dshMacToolsMonitorSectionBody' }, [
+        h('p', { key: 'title', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.curve.title')),
+        sensorControl,
+        h(MonitorCurveChart, {
+          key: 'chart',
+          t,
+          points: effectiveCurve.points,
+          minRpm,
+          maxRpm,
+          disabled: controlsDisabled,
+          onChange: handleCurveChange,
+          onCommit: commitCurve,
+        }),
+      ])
+
+      const presets = fanControl !== null && Array.isArray(fanControl.presets) ? fanControl.presets : []
+      const presetNodes = presets.map((preset, index) => {
+        const label = monitorPresetLabel(t, preset)
+        const active = monitorPresetActive(preset, fanControl)
+        const chip = h('button', {
+          key: `preset-${typeof preset.id === 'string' ? preset.id : index}`,
+          type: 'button',
+          className: active
+            ? 'dshMacToolsMonitorPreset dshMacToolsMonitorPresetActive'
+            : 'dshMacToolsMonitorPreset',
+          'aria-pressed': active,
+          disabled: pending !== null,
+          onClick: () => applyPreset(preset),
+        }, label)
+        if (preset.builtin === true) return chip
+        const id = typeof preset.id === 'string' ? preset.id : ''
+        return h('span', {
+          key: `preset-wrap-${id === '' ? index : id}`,
+          className: 'dshMacToolsMonitorPresetWrap',
+        }, [
+          chip,
+          h('button', {
+            key: 'delete',
+            type: 'button',
+            className: 'dshMacToolsMonitorPresetDelete',
+            'aria-label': t('monitor.fan.preset.delete', { name: label }),
+            title: t('monitor.fan.preset.delete', { name: label }),
+            disabled: pending !== null,
+            onClick: () => { void store.fanDeletePreset(id) },
+          }, '×'),
+        ])
+      })
+      const presetSaveRow = h('div', { key: 'preset-save', className: 'dshMacToolsMonitorPresetSave' }, [
+        h('input', {
+          key: 'name',
+          type: 'text',
+          className: 'dshMacToolsInput dshMacToolsMonitorPresetInput',
+          value: presetName,
+          maxLength: 40,
+          placeholder: t('monitor.fan.preset.namePlaceholder'),
+          'aria-label': t('monitor.fan.preset.namePlaceholder'),
+          disabled: controlsDisabled,
+          onChange: (event) => setPresetName(event.target.value),
+        }),
+        h('button', {
+          key: 'save',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          title: t('monitor.fan.preset.saveActive'),
+          disabled: pending !== null || presetName.trim() === '' || fanControl === null || fanControl.mode === 'auto',
+          onClick: savePreset,
+        }, t('monitor.fan.preset.save')),
+        presetNotice === ''
+          ? null
+          : h('span', { key: 'notice', className: 'dshMacToolsMonitorAlertNotice' }, presetNotice),
+      ])
+      const presetsBlock = h('div', { key: 'presets', className: 'dshMacToolsMonitorSectionBody' }, [
+        h('p', { key: 'label', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.presets')),
+        h('div', { key: 'chips', className: 'dshMacToolsMonitorPresets' }, presetNodes),
+        presetSaveRow,
+      ])
+
+      const appliedRpm = fanControl !== null && Number.isFinite(fanControl.appliedRpm) ? fanControl.appliedRpm : null
+      const appliedAt = fanControl !== null && typeof fanControl.lastAppliedAt === 'string' && fanControl.lastAppliedAt !== ''
+        ? formatDateTime(fanControl.lastAppliedAt)
+        : ''
+      const holdingText = fanControl === null || fanControl.mode === 'auto' || appliedRpm === null
+        ? t('monitor.fan.autoHolding')
+        : t('monitor.fan.holding', { rpm: Math.round(appliedRpm) })
+      const fanFooter = h('p', { key: 'footer', className: 'dshMacToolsMonitorFanFooter' }, appliedAt === ''
+        ? holdingText
+        : `${holdingText} · ${t('monitor.fan.appliedAt', { time: appliedAt })}`)
+
+      let body
+      if (fanControl === null) {
+        body = [
+          h('p', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.fan.notReadyHint')),
+          fanErrorNotice,
+          h('div', { key: 'actions', className: 'dshMacToolsMonitorFanBar' }, retryButton),
+        ]
+      } else if (fanControl.state === 'not-installed') {
+        body = [
+          h('p', { key: 'title', className: 'dshMacToolsMonitorSectionMeta' }, t('monitor.fan.notInstalledTitle')),
+          h('p', { key: 'intro', className: 'dshMacToolsMonitorInstallText' }, t('monitor.fan.install.intro')),
+          h('p', { key: 'helper', className: 'dshMacToolsMonitorInstallMeta' }, t('monitor.fan.install.helper')),
+          h('p', { key: 'daemon', className: 'dshMacToolsMonitorInstallMeta' }, t('monitor.fan.install.daemon')),
+          h('p', { key: 'prompt', className: 'dshMacToolsMonitorInstallMeta' }, t('monitor.fan.install.prompt')),
+          fanErrorNotice,
+          h('div', { key: 'actions', className: 'dshMacToolsMonitorFanBar' }, pending === 'install'
+            ? h('p', { key: 'busy', className: 'dshMacToolsMonitorMuted', role: 'status' }, [spinner, t('monitor.fan.enabling')])
+            : h('button', {
+              key: 'enable',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonPrimary',
+              disabled: pending !== null,
+              onClick: () => { void store.fanInstall() },
+            }, [glyph('settings', 15, 'icon'), h('span', { key: 'label' }, t('monitor.fan.enable'))])),
+        ]
+      } else if (fanControl.state === 'installing') {
+        body = [
+          h('p', { key: 'busy', className: 'dshMacToolsMonitorMuted', role: 'status' }, [spinner, t('monitor.fan.installing')]),
+        ]
+      } else if (fanControl.state === 'unavailable') {
+        body = [
+          h('div', { key: 'unavailable', className: 'dshMacToolsNotice', role: 'status' }, [
+            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+            h('p', { key: 'text' }, monitorFanReasonText(t, fanControl.reason, fanControl.message)),
+          ]),
+          fanErrorNotice,
+          h('div', { key: 'actions', className: 'dshMacToolsMonitorFanBar' }, [retryButton, uninstallButton]),
+        ]
+      } else if (fanControl.state === 'error') {
+        const retryable = fanControl.reason !== 'no-fans' && fanControl.reason !== 'unsupported-platform'
+        body = [
+          h('p', { key: 'title', className: 'dshMacToolsMonitorSectionMeta' }, t('monitor.fan.errorTitle')),
+          h('div', { key: 'reason', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+            h('p', { key: 'text' }, monitorFanReasonText(t, fanControl.reason, fanControl.message)),
+          ]),
+          fanErrorNotice,
+          otherWarning,
+          h('div', { key: 'actions', className: 'dshMacToolsMonitorFanBar' }, [
+            retryButton,
+            retryable
+              ? h('button', {
+                key: 'reinstall',
+                type: 'button',
+                className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+                disabled: pending !== null,
+                onClick: () => { void store.fanInstall() },
+              }, pending === 'install' ? t('monitor.fan.enabling') : t('monitor.fan.reinstall'))
+              : null,
+            uninstallButton,
+          ]),
+        ]
+      } else {
+        body = [
+          fanRows.length === 0
+            ? null
+            : h('ul', { key: 'fans', className: 'dshMacToolsMonitorFanFans', 'aria-label': t('monitor.fan.fansAria') }, fanRows),
+          otherWarning,
+          modeRow,
+          manualBlock,
+          curveBlock,
+          presetsBlock,
+          h('div', { key: 'bottom', className: 'dshMacToolsMonitorFanBar' }, [
+            h('button', {
+              key: 'auto',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+              disabled: pending !== null,
+              onClick: () => { void store.fanApply({ mode: 'auto' }) },
+            }, t('monitor.fan.restoreAuto')),
+            uninstallButton,
+          ]),
+          fanFooter,
+          fanErrorNotice,
+        ]
+      }
+
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.fan.title'),
+      }, [
+        h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.fan.title')),
+          ready
+            ? h('span', { key: 'mode', className: 'dshMacToolsMonitorSectionMeta' }, monitorFanModeLabel(t, fanControl.mode))
+            : null,
+        ]),
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, body),
+      ])
+    }
+
+    /**
+     * 进程排行. Collapsed by default; while expanded the visible tab polls the
+     * Host every three seconds. Each row's kill action is a two-step inline
+     * confirmation armed for three seconds; the Host's `killable` flag (when
+     * present) is authoritative, and the documented error codes are the final
+     * authority on a refused kill.
+     *
+     * @param {object} props - store, snapshot and translator.
+     * @returns {object} the section element.
+     */
+    function MonitorProcessSection({ store, snapshot, t }) {
+      const processes = snapshot.monitor.processes
+      const open = processes.open === true
+      const sort = processes.sort === 'memory' ? 'memory' : 'cpu'
+      const armedPid = processes.armedPid
+      const killingPid = processes.killingPid
+      const actionError = processes.actionError
+      const listError = processes.error
+      const value = processes.value
+      const rows = value !== null && typeof value === 'object' && Array.isArray(value.processes)
+        ? value.processes.slice(0, MONITOR_PROCESS_LIMIT)
+        : []
+
+      React.useEffect(() => {
+        if (armedPid === null || armedPid === undefined) return undefined
+        const timer = setTimeout(() => store.cancelProcessKill(), MONITOR_KILL_ARM_MS)
+        return () => clearTimeout(timer)
+      }, [armedPid, store])
+
+      const toggle = h('div', { key: 'actions', className: 'dshMacToolsMonitorSectionActions' }, h('button', {
+        type: 'button',
+        className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+        'aria-expanded': open,
+        onClick: () => store.toggleMonitorProcesses(),
+      }, open ? t('monitor.processes.collapse') : t('monitor.processes.expand')))
+
+      const head = h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+        h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.processes.title')),
+        toggle,
+      ])
+
+      if (open !== true) {
+        return h('section', {
+          className: 'dshMacToolsMonitorSection',
+          'aria-label': t('monitor.processes.title'),
+        }, [head])
+      }
+
+      const sortButtons = ['cpu', 'memory'].map((id) => h('button', {
+        key: id,
+        type: 'button',
+        className: sort === id
+          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
+          : 'dshMacToolsMonitorSegment',
+        'aria-pressed': sort === id,
+        onClick: () => store.setMonitorProcessSort(id),
+      }, t(`monitor.processes.sort.${id}`)))
+
+      const sortRow = h('div', { key: 'sort', className: 'dshMacToolsMonitorProcessSort' }, [
+        h('div', {
+          key: 'seg',
+          className: 'dshMacToolsMonitorSegmented',
+          role: 'group',
+          'aria-label': t('monitor.processes.sortAria'),
+        }, sortButtons),
+        h('span', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.processes.hint', {
+          sort: t(`monitor.processes.sort.${sort}`),
+        })),
+        processes.status === 'loading' && value === null
+          ? h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true })
+          : null,
+      ])
+
+      const headerRow = h('li', {
+        key: 'columns',
+        className: 'dshMacToolsMonitorProcessRow dshMacToolsMonitorProcessRowHead',
+        'aria-hidden': true,
+      }, [
+        h('span', { key: 'name' }, t('monitor.processes.name')),
+        h('span', { key: 'cpu', className: 'dshMacToolsMonitorProcessValue' }, t('monitor.processes.cpu')),
+        h('span', { key: 'memory', className: 'dshMacToolsMonitorProcessValue' }, t('monitor.processes.memory')),
+        h('span', {
+          key: 'rss',
+          className: 'dshMacToolsMonitorProcessValue dshMacToolsMonitorProcessValueRss',
+        }, t('monitor.processes.rss')),
+        h('span', { key: 'actions' }),
+      ])
+
+      const rowNodes = rows.map((row, index) => {
+        const pid = Number.isFinite(row.pid) ? row.pid : null
+        const name = typeof row.name === 'string' && row.name !== '' ? row.name : t('monitor.unknown')
+        const cpuPercent = Number.isFinite(row.cpuPercent) ? row.cpuPercent : 0
+        const memoryPercent = Number.isFinite(row.memoryPercent) ? row.memoryPercent : 0
+        const killable = row.killable !== false
+          && pid !== null
+          && Number.isInteger(pid)
+          && pid > 1
+          && row.protected !== true
+        const armed = pid !== null && armedPid === pid
+        const killing = pid !== null && killingPid === pid
+        let action
+        if (killable !== true || pid === null) {
+          action = h('span', {
+            key: 'protected',
+            className: 'dshMacToolsMonitorProtected',
+            title: t('monitor.processes.killProtected'),
+          }, t('monitor.processes.killProtected'))
+        } else {
+          action = h('button', {
+            key: 'kill',
+            type: 'button',
+            className: armed ? 'dshMacToolsMonitorKill dshMacToolsMonitorKillArmed' : 'dshMacToolsMonitorKill',
+            disabled: killing === true,
+            'aria-label': t('monitor.processes.killAria', { name, pid }),
+            onClick: () => {
+              if (armed === true) void store.killMonitorProcess(pid)
+              else store.armProcessKill(pid)
+            },
+          }, killing === true
+            ? t('monitor.processes.killing')
+            : armed === true
+              ? t('monitor.processes.killArmed')
+              : t('monitor.processes.kill'))
+        }
+        return h('li', {
+          key: pid === null ? `row-${index}` : `row-${pid}-${index}`,
+          className: 'dshMacToolsMonitorProcessRow',
+        }, [
+          h('span', { key: 'name', className: 'dshMacToolsMonitorProcessName' }, [
+            h('span', { key: 'label', className: 'dshMacToolsMonitorProcessLabel', title: name }, name),
+            h('span', {
+              key: 'pid',
+              className: 'dshMacToolsMonitorProcessPid',
+            }, pid === null ? '' : t('monitor.processes.pid', { pid })),
+          ]),
+          h('span', { key: 'cpu', className: 'dshMacToolsMonitorProcessValue' }, `${formatPercent(cpuPercent)}%`),
+          h('span', { key: 'memory', className: 'dshMacToolsMonitorProcessValue' }, `${formatPercent(memoryPercent)}%`),
+          h('span', {
+            key: 'rss',
+            className: 'dshMacToolsMonitorProcessValue dshMacToolsMonitorProcessValueRss',
+          }, monitorSizeText(row.rssBytes)),
+          h('span', { key: 'actions', className: 'dshMacToolsMonitorProcessActions' }, action),
+        ])
+      })
+
+      const actionErrorNotice = actionError === null || actionError === undefined
+        ? null
+        : h('div', { key: 'action-error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+          h('p', { key: 'text' }, monitorProcessErrorText(t, actionError)),
+          h('button', {
+            key: 'dismiss',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => store.dismissMonitorProcessError(),
+          }, t('common.dismiss')),
+        ])
+      const staleErrorNotice = listError === null || listError === undefined
+        ? null
+        : h('p', { key: 'list-error', className: 'dshMacToolsMonitorAlertError', role: 'alert' }, t('monitor.processes.error', {
+          message: listError.message !== undefined && listError.message !== null ? listError.message : '',
+        }))
+
+      let listBody
+      if (value === null) {
+        if (processes.status === 'error' && listError !== null && listError !== undefined) {
+          listBody = h('div', { key: 'error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+            h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+            h('p', { key: 'text' }, t('monitor.processes.error', {
+              message: listError.message !== undefined && listError.message !== null ? listError.message : '',
+            })),
+            h('button', {
+              key: 'retry',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => { void store.loadMonitorProcesses() },
+            }, t('common.retry')),
+          ])
+        } else {
+          listBody = h('p', { key: 'loading', className: 'dshMacToolsMonitorMuted', role: 'status' }, [
+            h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true }),
+            ' ',
+            t('monitor.processes.loading'),
+          ])
+        }
+      } else if (rows.length === 0) {
+        listBody = h('p', { key: 'empty', className: 'dshMacToolsMonitorMuted' }, t('monitor.processes.empty'))
+      } else {
+        listBody = h('ul', {
+          key: 'table',
+          className: 'dshMacToolsMonitorProcessTable',
+          'aria-label': t('monitor.processes.title'),
+        }, [headerRow].concat(rowNodes))
+      }
+
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.processes.title'),
+      }, [
+        head,
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [
+          sortRow,
+          actionErrorNotice,
+          value === null ? null : staleErrorNotice,
+          listBody,
+        ]),
+      ])
+    }
+
+    /**
+     * 告警. Enabled/notify switches, the three threshold fields, the cooldown,
+     * save/test buttons and the recent events list (newest first, localized).
+     *
+     * @param {object} props - store, snapshot and translator.
+     * @returns {object} the section element.
+     */
+    function MonitorAlertsSection({ store, snapshot, t }) {
+      const monitor = snapshot.monitor
+      const value = monitor.value
+      const alertsState = monitor.alerts
+      const block = value !== null && typeof value === 'object' && value.alerts !== null && typeof value.alerts === 'object'
+        ? value.alerts
+        : null
+      const settings = block !== null && block.settings !== null && typeof block.settings === 'object' ? block.settings : null
+      const events = block !== null && Array.isArray(block.events) ? block.events : []
+      const sensors = value !== null && typeof value === 'object'
+        && value.sample !== null && typeof value.sample === 'object'
+        && value.sample.sensors !== null && typeof value.sample.sensors === 'object'
+        ? value.sample.sensors
+        : null
+      // §6: without SMC there is no temperature to alert on, so the field is
+      // disabled and the reason is explained instead of silently saving.
+      const temperatureDisabled = sensors !== null && sensors.available === false
+      const [draft, setDraft] = React.useState(null)
+      const [notice, setNotice] = React.useState(null)
+
+      React.useEffect(() => {
+        if (notice === null) return undefined
+        const timer = setTimeout(() => setNotice(null), MONITOR_ALERT_NOTICE_MS)
+        return () => clearTimeout(timer)
+      }, [notice])
+
+      /**
+       * Turn an alerts settings block into editable string fields.
+       *
+       * @param {object} source - the Host's settings.
+       * @returns {object} the form draft.
+       */
+      function draftFrom(source) {
+        return {
+          enabled: source.enabled === true,
+          cpuPercent: Number.isFinite(source.cpuPercent) ? String(source.cpuPercent) : '90',
+          temperatureCelsius: Number.isFinite(source.temperatureCelsius) ? String(source.temperatureCelsius) : '95',
+          memoryPercent: Number.isFinite(source.memoryPercent) ? String(source.memoryPercent) : '90',
+          cooldownSeconds: Number.isFinite(source.cooldownSeconds) ? String(source.cooldownSeconds) : '300',
+          notify: source.notify === true,
+        }
+      }
+
+      const form = draft !== null ? draft : (settings === null ? null : draftFrom(settings))
+      const numericValues = {}
+      let invalid = false
+      if (form !== null) {
+        const fields = ['cpuPercent', 'temperatureCelsius', 'memoryPercent', 'cooldownSeconds']
+        for (let index = 0; index < fields.length; index += 1) {
+          const raw = form[fields[index]]
+          const parsed = Number(raw)
+          numericValues[fields[index]] = parsed
+          if (raw === '' || raw === null || raw === undefined || !Number.isFinite(parsed)) invalid = true
+        }
+      }
+
+      const updateField = (field, next) => {
+        const base = form === null ? {} : form
+        setDraft(Object.assign({}, base, { [field]: next }))
+      }
+      const save = () => {
+        if (form === null) return
+        if (invalid === true) {
+          setNotice({ kind: 'error', text: t('monitor.alerts.error.invalid') })
+          return
+        }
+        void store.saveMonitorAlerts({
+          enabled: form.enabled === true,
+          cpuPercent: numericValues.cpuPercent,
+          temperatureCelsius: numericValues.temperatureCelsius,
+          memoryPercent: numericValues.memoryPercent,
+          cooldownSeconds: numericValues.cooldownSeconds,
+          notify: form.notify === true,
+        }).then((result) => {
+          if (result !== null && result.ok === true) {
+            const saved = result.settings
+            setDraft(saved !== null && typeof saved === 'object' ? draftFrom(saved) : null)
+            setNotice({ kind: 'ok', text: t('monitor.alerts.saved') })
+            return
+          }
+          const failure = result !== null && result.error !== null ? result.error : null
+          setNotice({
+            kind: 'error',
+            text: failure === null ? t('monitor.alerts.error.invalid') : monitorAlertErrorText(t, failure),
+          })
+        })
+      }
+      const test = () => {
+        void store.testMonitorAlerts().then((result) => {
+          if (result === null) return
+          if (result.ok !== true) {
+            const failure = result.error
+            setNotice({
+              kind: 'error',
+              text: failure === null
+                ? t('monitor.alerts.testUnavailable')
+                : (failure.code === 'host_missing' || failure.code === 'host_unreachable'
+                  ? monitorAlertErrorText(t, failure)
+                  : t('monitor.alerts.testFailed', { message: failure.message !== undefined ? failure.message : '' })),
+            })
+            return
+          }
+          setNotice({
+            kind: result.notified === true ? 'ok' : 'error',
+            text: result.notified === true ? t('monitor.alerts.testSent') : t('monitor.alerts.testUnavailable'),
+          })
+        })
+      }
+
+      const head = h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+        h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.alerts.title')),
+        h('span', { key: 'hint', className: 'dshMacToolsMonitorSectionMeta' }, t('monitor.alerts.hint')),
+      ])
+
+      if (block === null || form === null) {
+        return h('section', {
+          className: 'dshMacToolsMonitorSection',
+          'aria-label': t('monitor.alerts.title'),
+        }, [
+          head,
+          h('p', { key: 'unavailable', className: 'dshMacToolsMonitorMuted' }, t('monitor.alerts.unavailable')),
+        ])
+      }
+
+      const switchButton = (field, labelKey, checked) => h('button', {
+        key: field,
+        type: 'button',
+        role: 'switch',
+        'aria-checked': checked,
+        className: checked
+          ? 'dshMacToolsMonitorSwitch dshMacToolsMonitorSwitchOn'
+          : 'dshMacToolsMonitorSwitch',
+        onClick: () => updateField(field, !checked),
+      }, [
+        h('span', { key: 'dot', className: 'dshMacToolsMonitorSwitchDot', 'aria-hidden': true }),
+        h('span', { key: 'label' }, t(labelKey)),
+      ])
+      const numericField = (field, labelKey, disabled) => h('label', {
+        key: field,
+        className: 'dshMacToolsMonitorField',
+      }, [
+        h('span', { key: 'label', className: 'dshMacToolsMonitorFieldLabel' }, t(labelKey)),
+        h('input', {
+          key: 'input',
+          type: 'number',
+          inputMode: 'numeric',
+          className: 'dshMacToolsMonitorFieldInput',
+          value: form[field],
+          'aria-label': t(labelKey),
+          disabled: disabled === true,
+          onChange: (event) => updateField(field, event.target.value),
+        }),
+      ])
+
+      const eventNodes = events.map((event, index) => {
+        const record = event !== null && typeof event === 'object' ? event : {}
+        const metric = typeof record.metric === 'string' ? record.metric : ''
+        const temperature = metric === 'temperature'
+        const valueText = temperature ? monitorCelsiusText(record.value) : `${formatPercent(Number.isFinite(record.value) ? record.value : 0)}%`
+        const thresholdText = temperature ? monitorCelsiusText(record.threshold) : `${formatPercent(Number.isFinite(record.threshold) ? record.threshold : 0)}%`
+        return h('li', {
+          key: typeof record.id === 'string' ? record.id : `event-${index}`,
+          className: 'dshMacToolsMonitorEventRow',
+        }, [
+          h('span', { key: 'metric', className: 'dshMacToolsMonitorEventMetric' }, monitorAlertMetricLabel(t, metric)),
+          h('span', { key: 'detail', className: 'dshMacToolsMonitorEventDetail' }, t('monitor.alerts.eventRow', {
+            value: valueText,
+            threshold: thresholdText,
+          })),
+          h('span', { key: 'time', className: 'dshMacToolsMonitorEventTime' }, formatDateTime(record.at)),
+        ])
+      })
+
+      const noticeNode = notice === null
+        ? null
+        : h('span', {
+          key: 'notice',
+          className: notice.kind === 'error' ? 'dshMacToolsMonitorAlertError' : 'dshMacToolsMonitorAlertNotice',
+          role: notice.kind === 'error' ? 'alert' : undefined,
+        }, notice.text)
+
+      const body = h('div', { key: 'body', className: 'dshMacToolsMonitorAlerts' }, [
+        h('div', { key: 'switches', className: 'dshMacToolsMonitorSwitchRow' }, [
+          switchButton('enabled', 'monitor.alerts.enabled', form.enabled === true),
+          switchButton('notify', 'monitor.alerts.notify', form.notify === true),
+        ]),
+        h('div', { key: 'grid', className: 'dshMacToolsMonitorAlertGrid' }, [
+          numericField('cpuPercent', 'monitor.alerts.cpu'),
+          numericField('temperatureCelsius', 'monitor.alerts.temperature', temperatureDisabled),
+          numericField('memoryPercent', 'monitor.alerts.memory'),
+          numericField('cooldownSeconds', 'monitor.alerts.cooldown'),
+        ]),
+        temperatureDisabled === true
+          ? h('p', { key: 'temperature-disabled', className: 'dshMacToolsMonitorAlertNotice' }, t('monitor.alerts.temperatureUnavailable'))
+          : null,
+        h('p', { key: 'cooldown-hint', className: 'dshMacToolsMonitorAlertNotice' }, t('monitor.alerts.cooldownHint')),
+        invalid === true
+          ? h('p', { key: 'invalid', className: 'dshMacToolsMonitorAlertError', role: 'alert' }, t('monitor.alerts.error.invalid'))
+          : null,
+        h('div', { key: 'actions', className: 'dshMacToolsMonitorAlertActions' }, [
+          h('button', {
+            key: 'save',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonPrimary',
+            disabled: alertsState.saving === true || invalid === true,
+            onClick: save,
+          }, alertsState.saving === true ? t('monitor.alerts.saving') : t('monitor.alerts.save')),
+          h('button', {
+            key: 'test',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+            disabled: alertsState.testing === true,
+            onClick: test,
+          }, alertsState.testing === true ? t('monitor.alerts.testing') : t('monitor.alerts.test')),
+          noticeNode,
+        ]),
+        h('div', { key: 'events' }, [
+          h('p', { key: 'title', className: 'dshMacToolsMonitorAlertNotice' }, t('monitor.alerts.events')),
+          eventNodes.length === 0
+            ? h('p', { key: 'empty', className: 'dshMacToolsMonitorAlertNotice' }, t('monitor.alerts.eventsEmpty'))
+            : h('ul', { key: 'list', className: 'dshMacToolsMonitorEventList' }, eventNodes),
+        ]),
+      ])
+
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.alerts.title'),
+      }, [head, body])
+    }
+
+    /**
+     * 运行状态 / Status tab — a State-inspired live dashboard. It polls the
+     * Host snapshot only while visible (deduped, aborted on tab switch or
+     * unmount), polls the process ranking only while that section is expanded,
+     * and freezes everything while paused.
+     *
+     * @param {object} props - store, snapshot, translator and visibility.
+     * @returns {object} the element.
+     */
+    function MonitorTab({ store, snapshot, t, active }) {
+      const monitor = snapshot.monitor
+      const value = monitor.value
+      const processes = monitor.processes
+      const intervalMs = MONITOR_INTERVALS.indexOf(monitor.intervalMs) >= 0 ? monitor.intervalMs : MONITOR_POLL_MS
+      const paused = monitor.paused === true
+      const capabilities = value !== null && typeof value === 'object'
+        && value.capabilities !== null && typeof value.capabilities === 'object'
+        ? value.capabilities
+        : null
+      const platform = capabilities !== null && typeof capabilities.platform === 'string'
+        ? capabilities.platform
+        : 'darwin'
+      const unsupported = value !== null && platform !== 'darwin'
+
+      React.useEffect(() => {
+        if (active !== true || paused === true || unsupported === true) return undefined
+        // The signal belongs to the poll currently in flight, so switching the
+        // tab (or unmounting the panel) aborts the request itself, not just the
+        // timer. Store-level dedupe keeps at most one request in flight.
+        let controller = null
+        let inFlight = false
+        const start = () => {
+          if (inFlight === true) return
+          inFlight = true
+          controller = typeof AbortController === 'function' ? new AbortController() : null
+          const signal = controller === null ? undefined : controller.signal
+          const settle = () => {
+            inFlight = false
+            controller = null
+          }
+          store.loadMonitor({ signal }).then(settle, settle)
+        }
+        start()
+        const timer = setInterval(start, intervalMs)
+        return () => {
+          clearInterval(timer)
+          if (controller !== null) controller.abort()
+        }
+      }, [active, paused, unsupported, intervalMs, store])
+
+      React.useEffect(() => {
+        if (active !== true || paused === true || unsupported === true) return undefined
+        if (processes.open !== true) return undefined
+        let controller = null
+        let inFlight = false
+        const start = () => {
+          if (inFlight === true) return
+          inFlight = true
+          controller = typeof AbortController === 'function' ? new AbortController() : null
+          const signal = controller === null ? undefined : controller.signal
+          const settle = () => {
+            inFlight = false
+            controller = null
+          }
+          store.loadMonitorProcesses({ signal }).then(settle, settle)
+        }
+        start()
+        const timer = setInterval(start, MONITOR_PROCESS_POLL_MS)
+        return () => {
+          clearInterval(timer)
+          if (controller !== null) controller.abort()
+        }
+      }, [active, paused, unsupported, processes.open, store])
+
+      // --- toolbar -------------------------------------------------------
+      const sampledAt = value !== null && typeof value === 'object' && typeof value.sampledAt === 'string' && value.sampledAt !== ''
+        ? value.sampledAt
+        : null
+      const intervalButtons = MONITOR_INTERVALS.map((option) => h('button', {
+        key: option,
+        type: 'button',
+        className: intervalMs === option
+          ? 'dshMacToolsMonitorInterval dshMacToolsMonitorIntervalActive'
+          : 'dshMacToolsMonitorInterval',
+        'aria-pressed': intervalMs === option,
+        onClick: () => store.setMonitorInterval(option),
+      }, t('monitor.interval.option', { n: option / 1000 })))
+      const badges = []
+      if (capabilities !== null) {
+        const sensorsInfo = capabilities.sensors !== null && typeof capabilities.sensors === 'object' ? capabilities.sensors : null
+        const sensorsOk = sensorsInfo === null || sensorsInfo.supported !== false
+        badges.push(h('span', {
+          key: 'sensors',
+          className: sensorsOk
+            ? 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgeOk'
+            : 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgeWarn',
+          title: sensorsOk
+            ? t('monitor.available')
+            : (sensorsInfo !== null && sensorsInfo.reason !== null && sensorsInfo.reason !== undefined
+              ? monitorSensorReasonText(t, sensorsInfo.reason)
+              : t('monitor.unavailable')),
+        }, t('monitor.badge.sensors')))
+        const fansInfo = capabilities.fanControl !== null && typeof capabilities.fanControl === 'object' ? capabilities.fanControl : null
+        const fansOk = fansInfo === null || fansInfo.supported !== false
+        badges.push(h('span', {
+          key: 'fans',
+          className: fansOk
+            ? 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgeOk'
+            : 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgeWarn',
+          title: fansOk
+            ? t('monitor.available')
+            : (fansInfo !== null && fansInfo.reason !== null && fansInfo.reason !== undefined
+              ? monitorFanReasonText(t, fansInfo.reason, null)
+              : t('monitor.unavailable')),
+        }, t('monitor.badge.fans')))
+        if (capabilities.battery === true) {
+          badges.push(h('span', {
+            key: 'battery',
+            className: 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgeOk',
+            title: t('monitor.available'),
+          }, t('monitor.badge.battery')))
+        }
+      }
+      const toolbar = h('div', {
+        key: 'toolbar',
+        className: 'dshMacToolsMonitorToolbar',
+        role: 'toolbar',
+        'aria-label': t('monitor.toolbarAria'),
+      }, [
+        h('p', { key: 'sampled', className: 'dshMacToolsMonitorSampledAt' }, sampledAt === null
+          ? t('monitor.loading')
+          : t('monitor.sampledAt', { time: formatDateTime(sampledAt) })),
+        paused ? h('span', { key: 'paused', className: 'dshMacToolsMonitorBadge dshMacToolsMonitorBadgePaused' }, t('monitor.paused')) : null,
+        badges.length === 0 ? null : h('div', {
+          key: 'badges',
+          className: 'dshMacToolsMonitorBadges',
+          'aria-label': t('monitor.badgesAria'),
+        }, badges),
+        h('div', {
+          key: 'intervals',
+          className: 'dshMacToolsMonitorIntervals',
+          role: 'group',
+          'aria-label': t('monitor.intervalAria'),
+        }, intervalButtons),
+        h('button', {
+          key: 'pause',
+          type: 'button',
+          role: 'switch',
+          'aria-checked': paused,
+          className: paused
+            ? 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline dshMacToolsToggleOn'
+            : 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          onClick: () => store.setMonitorPaused(!paused),
+        }, paused ? t('monitor.resume') : t('monitor.pause')),
+        h('button', {
+          key: 'refresh',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          onClick: () => { void store.refreshMonitor() },
+        }, [glyph('refresh', 13, 'icon'), h('span', { key: 'label' }, t('monitor.refresh'))]),
+      ])
+
+      if (unsupported === true) {
+        return h('div', { className: 'dshMacToolsMonitor' }, [
+          toolbar,
+          h('section', { key: 'unsupported', className: 'dshMacToolsMonitorSection' }, [
+            h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.unsupported.title')),
+            h('p', { key: 'hint', className: 'dshMacToolsMonitorInstallMeta' }, t('monitor.unsupported.hint', { platform })),
+          ]),
+        ])
+      }
+
+      if (value === null) {
+        const failure = monitor.error
+        return h('div', { className: 'dshMacToolsMonitor' }, [
+          toolbar,
+          failure === null || failure === undefined
+            ? h('div', { key: 'skeleton', className: 'dshMacToolsLoading', 'aria-busy': 'true' }, [
+              h('span', { key: 'sr', className: 'dshMacToolsSrOnly' }, t('monitor.loading')),
+              h('div', { key: 'one', className: 'dshMacToolsSkeleton dshMacToolsMonitorSkeleton' }),
+            ])
+            : h('div', { key: 'error', className: 'dshMacToolsNotice dshMacToolsNoticeError', role: 'alert' }, [
+              h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+              h('p', { key: 'text' }, monitorErrorText(t, failure)),
+              h('button', {
+                key: 'retry',
+                type: 'button',
+                className: 'dshMacToolsButton dshMacToolsButtonCompact',
+                onClick: () => { void store.refreshMonitor() },
+              }, t('common.retry')),
+            ]),
+        ])
+      }
+
+      // --- overview cards -------------------------------------------------
+      const sample = value.sample !== null && typeof value.sample === 'object' ? value.sample : {}
+      const host = sample.host !== null && typeof sample.host === 'object' ? sample.host : {}
+      const cpu = sample.cpu !== null && typeof sample.cpu === 'object' ? sample.cpu : {}
+      const memory = sample.memory !== null && typeof sample.memory === 'object' ? sample.memory : {}
+      const disk = sample.disk !== null && typeof sample.disk === 'object' ? sample.disk : {}
+      const network = sample.network !== null && typeof sample.network === 'object' ? sample.network : {}
+      const history = value.history !== null && typeof value.history === 'object' ? value.history : {}
+      const battery = sample.battery !== null && typeof sample.battery === 'object' ? sample.battery : null
+
+      const legendItem = (label, percent, color) => h('li', {
+        key: label,
+        className: 'dshMacToolsMonitorLegendItem',
+      }, [
+        h(MonitorLegendDot, { key: 'dot', color }),
+        h('span', { key: 'text' }, `${label} ${formatPercent(Number.isFinite(percent) ? percent : 0)}%`),
+      ])
+
+      const cpuChip = typeof host.cpuModel === 'string' && host.cpuModel !== '' ? host.cpuModel : t('monitor.unknown')
+      const temperature = Number.isFinite(cpu.temperatureCelsius) ? cpu.temperatureCelsius : null
+      const loadAverage = Array.isArray(cpu.loadAverage)
+        ? cpu.loadAverage.filter((entry) => Number.isFinite(entry)).map((entry) => entry.toFixed(1)).join(' / ')
+        : ''
+      const coreSummary = [
+        Number.isFinite(host.cpuCores) ? t('monitor.cpu.cores', { count: host.cpuCores }) : null,
+        loadAverage === '' ? null : t('monitor.cpu.loadAverage', { load: loadAverage }),
+      ].filter((entry) => entry !== null).join(' · ')
+      const cpuCard = h(MonitorCard, { key: 'cpu', title: t('monitor.cpu.title'), meta: cpuChip }, [
+        h('div', { key: 'temp', className: 'dshMacToolsMonitorBig' }, [
+          h('p', { key: 'value', className: 'dshMacToolsMonitorBigValue' }, monitorCelsiusText(temperature)),
+          h('span', { key: 'unit', className: 'dshMacToolsMonitorBigUnit' }, t('monitor.cpu.temperature')),
+        ]),
+        temperature === null
+          ? h('p', { key: 'no-temp', className: 'dshMacToolsMonitorMuted' }, t('monitor.cpu.noTemperature'))
+          : h(MonitorSparkline, {
+            key: 'temp-spark',
+            series: [{ points: history.cpuTemperature, color: MONITOR_SERIES_COLORS.cpuTemperature, area: false }],
+            ariaLabel: t('monitor.cpu.temperature'),
+          }),
+        h(MonitorSparkline, {
+          key: 'spark',
+          series: [{ points: history.cpu, color: MONITOR_SERIES_COLORS.cpu, area: true }],
+          fixedMin: 0,
+          fixedMax: 100,
+          ariaLabel: t('monitor.cpu.title'),
+        }),
+        h('ul', { key: 'legend', className: 'dshMacToolsMonitorLegend' }, [
+          legendItem(t('monitor.cpu.user'), cpu.userPercent, MONITOR_SERIES_COLORS.cpuUser),
+          legendItem(t('monitor.cpu.system'), cpu.systemPercent, MONITOR_SERIES_COLORS.cpuSystem),
+          legendItem(t('monitor.cpu.idle'), cpu.idlePercent, MONITOR_SERIES_COLORS.cpuIdle),
+        ]),
+        coreSummary === '' ? null : h('p', { key: 'cores-meta', className: 'dshMacToolsMonitorMuted' }, coreSummary),
+        h(MonitorCores, { key: 'cores', t, cores: cpu.perCorePercent }),
+      ])
+
+      const memorySegments = monitorMemorySegments(memory)
+      const pressure = monitorPressureInfo(t, typeof memory.pressure === 'string' ? memory.pressure : null)
+      const memoryPercent = Number.isFinite(memory.usedPercent) ? memory.usedPercent : null
+      const memoryCard = h(MonitorCard, {
+        key: 'memory',
+        title: t('monitor.memory.title'),
+        meta: h('span', {
+          className: pressure.className,
+          title: t('monitor.memory.pressure'),
+        }, pressure.label),
+      }, [
+        h('p', { key: 'available', className: 'dshMacToolsMonitorRowLine' }, t('monitor.memory.available', {
+          available: monitorSizeText(memory.availableBytes),
+          total: monitorSizeText(memory.totalBytes),
+        })),
+        memoryPercent === null
+          ? null
+          : h('p', { key: 'used', className: 'dshMacToolsMonitorMuted' }, t('monitor.memory.usedPercent', {
+            percent: formatPercent(memoryPercent),
+          })),
+        memorySegments.length === 0
+          ? null
+          : h('div', {
+            key: 'stack',
+            className: 'dshMacToolsMonitorStack',
+            role: 'img',
+            'aria-label': t('monitor.memory.breakdown'),
+          }, memorySegments.map((segment) => h('span', {
+            key: segment.key,
+            className: 'dshMacToolsMonitorStackPart',
+            style: {
+              width: `${clampNumber(segment.percent, 0, 100)}%`,
+              background: segment.color,
+            },
+          }))),
+        memorySegments.length === 0
+          ? null
+          : h('ul', { key: 'legend', className: 'dshMacToolsMonitorLegend' }, memorySegments
+            .filter((segment) => segment.labelKey !== null)
+            .map((segment) => h('li', {
+              key: `legend-${segment.key}`,
+              className: 'dshMacToolsMonitorLegendItem',
+            }, [
+              h(MonitorLegendDot, { key: 'dot', color: segment.color }),
+              h('span', { key: 'text' }, `${t(segment.labelKey)} ${monitorSizeText(segment.bytes)}`),
+            ]))),
+        Number.isFinite(memory.swapUsedBytes) && memory.swapUsedBytes > 0
+          ? h('p', { key: 'swap', className: 'dshMacToolsMonitorMuted' }, t('monitor.memory.swap', {
+            size: monitorSizeText(memory.swapUsedBytes),
+          }))
+          : null,
+      ])
+
+      const diskPercent = Number.isFinite(disk.usedPercent)
+        ? disk.usedPercent
+        : (Number.isFinite(disk.totalBytes) && disk.totalBytes > 0 && Number.isFinite(disk.usedBytes)
+          ? (disk.usedBytes / disk.totalBytes) * 100
+          : null)
+      const diskCard = h(MonitorCard, {
+        key: 'disk',
+        title: t('monitor.disk.title'),
+        meta: typeof disk.name === 'string' && disk.name !== '' ? disk.name : null,
+      }, [
+        h('p', { key: 'available', className: 'dshMacToolsMonitorRowLine' }, t('monitor.disk.available', {
+          available: monitorSizeText(disk.freeBytes),
+          total: monitorSizeText(disk.totalBytes),
+        })),
+        h(MeterBar, {
+          key: 'bar',
+          percent: diskPercent === null ? 0 : diskPercent,
+          tone: 'disk',
+          label: t('monitor.disk.usedPercent', { percent: formatPercent(diskPercent === null ? 0 : diskPercent) }),
+        }),
+        diskPercent === null && (typeof disk.mount !== 'string' || disk.mount === '')
+          ? null
+          : h('p', { key: 'meta', className: 'dshMacToolsMonitorMuted' }, [
+            diskPercent === null ? null : t('monitor.disk.usedPercent', { percent: formatPercent(diskPercent) }),
+            diskPercent !== null && typeof disk.mount === 'string' && disk.mount !== '' ? ' · ' : null,
+            typeof disk.mount === 'string' && disk.mount !== ''
+              ? t('monitor.disk.mount', { mount: disk.mount })
+              : null,
+          ]),
+      ])
+
+      const networkCard = h(MonitorCard, {
+        key: 'network',
+        title: t('monitor.network.title'),
+        meta: typeof network.interface === 'string' && network.interface !== ''
+          ? t('monitor.network.interface', { name: network.interface })
+          : null,
+      }, [
+        h('p', { key: 'ip', className: 'dshMacToolsMonitorRowLine' }, [
+          h('span', { key: 'label' }, t('monitor.network.ip')),
+          h('span', {
+            key: 'value',
+          }, typeof network.localIp === 'string' && network.localIp !== '' ? network.localIp : t('monitor.network.none')),
+        ]),
+        h(MonitorSparkline, {
+          key: 'spark',
+          series: [
+            { points: history.networkDown, color: MONITOR_SERIES_COLORS.networkDown, area: true },
+            { points: history.networkUp, color: MONITOR_SERIES_COLORS.networkUp, area: false },
+          ],
+          fixedMin: 0,
+          tall: true,
+          ariaLabel: t('monitor.network.title'),
+        }),
+        h('ul', { key: 'legend', className: 'dshMacToolsMonitorLegend' }, [
+          h('li', { key: 'down', className: 'dshMacToolsMonitorLegendItem' }, [
+            h(MonitorLegendDot, { key: 'dot', color: MONITOR_SERIES_COLORS.networkDown }),
+            h('span', {
+              key: 'text',
+            }, `${t('monitor.network.down')} ${monitorRateText(network.receivedBytesPerSecond)}`),
+          ]),
+          h('li', { key: 'up', className: 'dshMacToolsMonitorLegendItem' }, [
+            h(MonitorLegendDot, { key: 'dot', color: MONITOR_SERIES_COLORS.networkUp }),
+            h('span', {
+              key: 'text',
+            }, `${t('monitor.network.up')} ${monitorRateText(network.sentBytesPerSecond)}`),
+          ]),
+        ]),
+        Number.isFinite(network.receivedTotalBytes) || Number.isFinite(network.sentTotalBytes)
+          ? h('p', { key: 'total', className: 'dshMacToolsMonitorMuted' }, t('monitor.network.total', {
+            down: monitorSizeText(network.receivedTotalBytes),
+            up: monitorSizeText(network.sentTotalBytes),
+          }))
+          : null,
+      ])
+
+      let batteryCard = null
+      if (battery !== null) {
+        const batteryPercent = Number.isFinite(battery.percent) ? battery.percent : null
+        const charging = battery.charging === true
+        const remainingMinutes = Number.isFinite(battery.timeRemainingMinutes) ? battery.timeRemainingMinutes : null
+        const health = Number.isFinite(battery.healthPercent) ? battery.healthPercent : null
+        const cycles = Number.isFinite(battery.cycleCount) ? battery.cycleCount : null
+        let statusText = null
+        if (charging === true) {
+          if (batteryPercent !== null && batteryPercent >= 100) statusText = t('monitor.battery.charged')
+        } else if (remainingMinutes !== null) {
+          statusText = t('monitor.battery.remaining', { duration: durationText(t, remainingMinutes * 60) })
+        } else {
+          statusText = t('monitor.battery.remainingUnknown')
+        }
+        batteryCard = h(MonitorCard, {
+          key: 'battery',
+          title: t('monitor.battery.title'),
+          meta: charging === true ? t('monitor.battery.charging') : t('monitor.battery.discharging'),
+        }, [
+          batteryPercent === null
+            ? null
+            : h('div', { key: 'level', className: 'dshMacToolsMonitorBig' }, [
+              h('p', { key: 'value', className: 'dshMacToolsMonitorBigValue' }, `${formatPercent(batteryPercent)}%`),
+            ]),
+          h(MeterBar, {
+            key: 'bar',
+            percent: batteryPercent === null ? 0 : batteryPercent,
+            tone: 'battery',
+            label: t('monitor.battery.level', { percent: formatPercent(batteryPercent === null ? 0 : batteryPercent) }),
+          }),
+          statusText === null
+            ? null
+            : h('p', { key: 'status', className: 'dshMacToolsMonitorRowLine' }, statusText),
+          health === null ? null : h('p', { key: 'health', className: 'dshMacToolsMonitorMuted' }, t('monitor.battery.health', {
+            percent: formatPercent(health),
+          })),
+          cycles === null ? null : h('p', { key: 'cycles', className: 'dshMacToolsMonitorMuted' }, t('monitor.battery.cycles', { count: cycles })),
+        ])
+      }
+
+      const footer = h('div', { key: 'footer', className: 'dshMacToolsMonitorFooter' }, [
+        h('span', { key: 'uptime' }, t('monitor.footer.uptime', {
+          duration: durationText(t, Number.isFinite(host.uptimeSeconds) ? host.uptimeSeconds : 0),
+        })),
+        h('span', { key: 'host' }, t('monitor.footer.host', {
+          model: typeof host.modelName === 'string' && host.modelName !== ''
+            ? host.modelName
+            : (typeof host.cpuModel === 'string' && host.cpuModel !== '' ? host.cpuModel : t('monitor.unknown')),
+          hostname: typeof host.hostname === 'string' && host.hostname !== '' ? host.hostname : t('monitor.unknown'),
+        })),
+        typeof host.osName === 'string' && host.osName !== ''
+          ? h('span', { key: 'os' }, t('monitor.footer.os', {
+            os: host.osName,
+            version: typeof host.osVersion === 'string' ? host.osVersion : '',
+          }))
+          : null,
+      ])
+
+      const overview = h('div', { key: 'overview', className: 'dshMacToolsMonitorOverview' }, [
+        cpuCard,
+        memoryCard,
+        diskCard,
+        networkCard,
+        batteryCard,
+        footer,
+      ])
+
+      const staleError = monitor.error === null || monitor.error === undefined
+        ? null
+        : h('div', { key: 'stale', className: 'dshMacToolsNotice', role: 'alert' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon', 'aria-hidden': true }, glyph('alert', 15)),
+          h('p', { key: 'text' }, monitorErrorText(t, monitor.error)),
+          h('button', {
+            key: 'retry',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => { void store.refreshMonitor() },
+          }, t('common.retry')),
+        ])
+
+      return h('div', { className: 'dshMacToolsMonitor' }, [
+        toolbar,
+        staleError,
+        overview,
+        h(MonitorSensorsSection, { key: 'sensors', t, sensors: sample.sensors }),
+        h(MonitorFanSection, { key: 'fan', store, snapshot, t }),
+        h(MonitorProcessSection, { key: 'processes', store, snapshot, t }),
+        h(MonitorAlertsSection, { key: 'alerts', store, snapshot, t }),
+      ])
+    }
+
+    // ---------------------------------------------------------------------
     // Host status pill, panel shell, rail icon
     // ---------------------------------------------------------------------
 
@@ -5508,11 +9180,12 @@ window.__ModuleLoader__.load({
     /**
      * The panel page, rendered by the `main` slot while this panel is active.
      *
-     * All four tabs stay mounted and inactive ones are hidden with the
+     * All five tabs stay mounted and inactive ones are hidden with the
      * `hidden` attribute, so an in-progress annotation set, the calculator's
-     * expression and history, the system snapshot and the transfer session all
-     * survive a tab switch. Only the visible tab polls: the system facts every
-     * 10 s and the phone-transfer session/lists every 2 s / 4 s.
+     * expression and history, the system snapshot, the live status snapshot
+     * and the transfer session all survive a tab switch. Only the visible tab
+     * polls: system facts every 10 s, the live status every 1 / 2 / 5 s and the
+     * phone-transfer session/lists every 2 s / 4 s.
      *
      * @param {object} props - slot props: the injected store plus the translator.
      * @returns {object} the page element.
@@ -5585,6 +9258,7 @@ window.__ModuleLoader__.load({
         if (id === 'screenshot') content = h(ScreenshotTab, { store, snapshot, t, active })
         else if (id === 'calculator') content = h(CalculatorTab, { store, snapshot, t })
         else if (id === 'system') content = h(SystemTab, { store, snapshot, t, active })
+        else if (id === 'monitor') content = h(MonitorTab, { store, snapshot, t, active })
         else content = h(TransferTab, { store, snapshot, t, active })
         return h('section', {
           key: id,

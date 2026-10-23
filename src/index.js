@@ -36,6 +36,7 @@ import * as captureModule from './capture.js'
 import { Config, resolveConfig } from './config.js'
 import { HotkeyController } from './hotkey.js'
 import { HistoryStore } from './history.js'
+import { MonitorService } from './monitor.js'
 import { createOps, expandHome } from './ops.js'
 import { PinManager } from './pin.js'
 import { API_PATH, createRoute } from './route.js'
@@ -193,6 +194,23 @@ export function apply(ctx, rawConfig) {
       },
     })
     : null
+  // The status monitor (State-style dashboard): software metrics, SMC sensors
+  // and fan control share one sampling loop. Construction is contained: a
+  // failure there costs the status tab only, never the rest of the panel.
+  /** @type {MonitorService | null} */
+  let monitor = null
+  try {
+    monitor = new MonitorService({
+      stateDirectory: join(pluginStateDirectory(ctx), 'monitor'),
+      config,
+      version,
+      warn,
+    })
+  } catch (error) {
+    warn('the status monitor is unavailable because its service could not be created', error)
+    monitor = null
+  }
+
   ops = createOps({
     config: { ...config, saveDirectory },
     store,
@@ -204,6 +222,7 @@ export function apply(ctx, rawConfig) {
     ...(hotkey === null ? {} : { hotkey }),
     ...(pins === null ? {} : { pins }),
     ...(transfer === null ? {} : { transfer }),
+    ...(monitor === null ? {} : { monitor }),
   })
 
   // The temporary capture directory belongs to the row: unloading or
@@ -226,6 +245,18 @@ export function apply(ctx, rawConfig) {
     ctx.effect(() => () => {
       pins.dispose()
     }, 'dsh-mac-tools: pinned images')
+  }
+
+  // The status monitor owns a sampling timer, the SMC sampler child and the fan
+  // controller connection. Unloading restores automatic fan control and stops
+  // the loop instead of leaving either behind.
+  if (monitor !== null) {
+    ctx.effect(() => () => {
+      monitor.dispose()
+    }, 'dsh-mac-tools: status monitor')
+    void monitor.start().catch((error) => {
+      warn('the status monitor failed to start', error)
+    })
   }
 
   // The browser half posts here. `connection.fetch` rather than
@@ -269,6 +300,7 @@ export function apply(ctx, rawConfig) {
     `Mac Tools ${version} active: captures in ${store.directory}, saves in ${saveDirectory}`
     + `, history ${history.indexPath}`
     + (transfer === null ? '' : `, phone transfer inbox ${transferDirectory}`)
-    + (visibility.supported ? `, hide-app ${visibility.appName ?? 'unknown'}` : ', hide-app unsupported'),
+    + (visibility.supported ? `, hide-app ${visibility.appName ?? 'unknown'}` : ', hide-app unsupported')
+    + (monitor === null ? '' : ', status monitor active'),
   )
 }

@@ -32,6 +32,12 @@ export const CONFIG_DEFAULTS = Object.freeze({
   transferSessionMinutes: 30,
   transferMaxFileMB: 512,
   transferAutoCopyText: false,
+  monitorSampleMs: 1000,
+  alertCpuPercent: 90,
+  alertTemperatureCelsius: 95,
+  alertMemoryPercent: 90,
+  alertCooldownSeconds: 300,
+  alertNotify: true,
 })
 
 /**
@@ -105,6 +111,39 @@ export const Config = Schema.object({
   transferAutoCopyText: Schema.boolean()
     .default(false)
     .description('Copy text received from the phone to the macOS clipboard automatically.'),
+  alertNotify: Schema.boolean()
+    .default(true)
+    .description('Show a macOS notification when a monitor threshold alert fires. The panel can change it at runtime; the choice is persisted in the plugin state directory.'),
+  monitorSampleMs: Schema.number()
+    .min(500)
+    .max(10000)
+    .step(100)
+    .default(1000)
+    .description('Sampling cadence of the status tab in milliseconds. The panel polls faster or slower on top; this is the Host-side collection loop (software metrics are collected at most every 2 s).'),
+  alertCpuPercent: Schema.number()
+    .min(1)
+    .max(100)
+    .step(1)
+    .default(90)
+    .description('Default CPU-usage alert threshold in percent for the status tab. The panel can change it at runtime; the persisted choice wins over this default.'),
+  alertTemperatureCelsius: Schema.number()
+    .min(40)
+    .max(120)
+    .step(1)
+    .default(95)
+    .description('Default CPU-temperature alert threshold in °C for the status tab (taken from the SMC sensor groups).'),
+  alertMemoryPercent: Schema.number()
+    .min(1)
+    .max(100)
+    .step(1)
+    .default(90)
+    .description('Default memory-usage alert threshold in percent for the status tab.'),
+  alertCooldownSeconds: Schema.number()
+    .min(0)
+    .max(3600)
+    .step(1)
+    .default(300)
+    .description('Minimum time between two alerts of the same metric, in seconds.'),
 })
 
 /**
@@ -160,6 +199,26 @@ export function resolveConfig(rawConfig) {
   const transferAutoCopyText = typeof config.transferAutoCopyText === 'boolean'
     ? config.transferAutoCopyText
     : CONFIG_DEFAULTS.transferAutoCopyText
+  const monitorSampleMs = Number.isFinite(config.monitorSampleMs)
+    && /** @type {number} */ (config.monitorSampleMs) >= 500
+    && /** @type {number} */ (config.monitorSampleMs) <= 10000
+    ? Math.round(/** @type {number} */ (config.monitorSampleMs))
+    : CONFIG_DEFAULTS.monitorSampleMs
+  const alertCpuPercent = Number.isFinite(config.alertCpuPercent)
+    ? Math.round(/** @type {number} */ (config.alertCpuPercent))
+    : CONFIG_DEFAULTS.alertCpuPercent
+  const alertTemperatureCelsius = Number.isFinite(config.alertTemperatureCelsius)
+    ? Math.round(/** @type {number} */ (config.alertTemperatureCelsius))
+    : CONFIG_DEFAULTS.alertTemperatureCelsius
+  const alertMemoryPercent = Number.isFinite(config.alertMemoryPercent)
+    ? Math.round(/** @type {number} */ (config.alertMemoryPercent))
+    : CONFIG_DEFAULTS.alertMemoryPercent
+  const alertCooldownSeconds = Number.isFinite(config.alertCooldownSeconds)
+    ? Math.round(/** @type {number} */ (config.alertCooldownSeconds))
+    : CONFIG_DEFAULTS.alertCooldownSeconds
+  const alertNotify = typeof config.alertNotify === 'boolean'
+    ? config.alertNotify
+    : CONFIG_DEFAULTS.alertNotify
   return {
     saveDirectory,
     maxShots,
@@ -174,5 +233,11 @@ export function resolveConfig(rawConfig) {
     transferSessionMinutes,
     transferMaxFileMB,
     transferAutoCopyText,
+    monitorSampleMs,
+    alertCpuPercent,
+    alertTemperatureCelsius,
+    alertMemoryPercent,
+    alertCooldownSeconds,
+    alertNotify,
   }
 }

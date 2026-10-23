@@ -49,7 +49,13 @@ function createReactStub() {
   return {
     createElement(type, props, ...children) {
       createElementTypes.add(typeof type === 'string' ? type : (type && type.name) || 'anonymous')
-      return { type, props: props === null || props === undefined ? {} : props, children }
+      const resolved = props === null || props === undefined ? {} : props
+      // Mirror React: children also arrive as `props.children`, so a stub
+      // renderer can invoke nested function components with their children.
+      if (children.length > 0) {
+        resolved.children = children.length === 1 ? children[0] : children
+      }
+      return { type, props: resolved, children }
     },
     useState(initial) {
       const value = typeof initial === 'function' ? initial() : initial
@@ -406,6 +412,262 @@ function outboxTextItem(overrides) {
     text: 'hello',
     ...(overrides === undefined ? {} : overrides),
   }
+}
+
+/**
+ * One history point for the monitor sparklines.
+ *
+ * @param {number} second - the point's offset in seconds.
+ * @param {number|null} value - the sampled value.
+ * @returns {{t:number,value:number|null}} the point.
+ */
+function monitorHistoryPoint(second, value) {
+  return { t: 1761220000000 + second * 1000, value }
+}
+
+/**
+ * A complete `monitor` snapshot answer as documented by the contract.
+ *
+ * @param {object} [overrides] - top-level fields to replace.
+ * @returns {object} the snapshot value.
+ */
+function monitorSnapshotValue(overrides) {
+  const value = {
+    version: '0.3.0',
+    sampledAt: '2026-10-23T11:12:13.000Z',
+    capabilities: {
+      platform: 'darwin',
+      sensors: { supported: true, reason: null },
+      fanControl: { supported: true, reason: null },
+      battery: false,
+      processes: true,
+    },
+    sample: {
+      at: '2026-10-23T11:12:13.000Z',
+      host: {
+        hostname: 'mac-mini.local',
+        modelName: 'Mac mini',
+        modelIdentifier: 'Mac16,10',
+        cpuModel: 'Apple M4',
+        arch: 'arm64',
+        osName: 'macOS',
+        osVersion: '26.3.1',
+        cpuCores: 10,
+        performanceCores: 4,
+        efficiencyCores: 6,
+        uptimeSeconds: 12345,
+      },
+      cpu: {
+        usagePercent: 18.2,
+        userPercent: 11.1,
+        systemPercent: 5.2,
+        idlePercent: 83.7,
+        loadAverage: [1.2, 1.5, 1.4],
+        perCorePercent: [12.3, 4.5, 51, 0, 3.2, 6.1, 0, 0, 2, 0],
+        temperatureCelsius: 73.2,
+      },
+      memory: {
+        totalBytes: 34359738368,
+        usedBytes: 21642608640,
+        availableBytes: 12717129728,
+        usedPercent: 62.9,
+        appBytes: 10000000000,
+        wiredBytes: 5000000000,
+        compressedBytes: 2000000000,
+        cachedBytes: 3000000000,
+        swapUsedBytes: 0,
+        pressure: 'normal',
+      },
+      disk: {
+        name: 'Macintosh HD',
+        mount: '/System/Volumes/Data',
+        totalBytes: 994662584320,
+        usedBytes: 168000000000,
+        freeBytes: 826662584320,
+        usedPercent: 16.9,
+      },
+      network: {
+        interface: 'en0',
+        localIp: '192.168.50.212',
+        receivedBytesPerSecond: 5120,
+        sentBytesPerSecond: 2048,
+        receivedTotalBytes: 1234567890,
+        sentTotalBytes: 98765432,
+      },
+      battery: null,
+      sensors: {
+        available: true,
+        reason: null,
+        groups: {
+          cpuPerformance: 90.6,
+          cpuEfficiency: 66.5,
+          gpu: 59.2,
+          ssd: 44.5,
+          memory: 57.2,
+          wifi: 33.7,
+          battery: null,
+          ambient: null,
+        },
+        readings: [
+          { key: 'Tp01', celsius: 90.6 },
+          { key: 'Tp05', celsius: 73.2 },
+          { key: 'Te01', celsius: 66.5 },
+          { key: 'TH0x', celsius: 40.6 },
+        ],
+      },
+      fans: {
+        available: true,
+        reason: null,
+        items: [{ index: 0, actualRpm: 2220, targetRpm: 2221, minRpm: 1000, maxRpm: 4900, mode: 'forced' }],
+      },
+    },
+    history: {
+      capacity: 60,
+      cpu: [monitorHistoryPoint(0, 18.2), monitorHistoryPoint(1, 20.1), monitorHistoryPoint(2, 15.4)],
+      memory: [monitorHistoryPoint(0, 62.9), monitorHistoryPoint(1, 63.1), monitorHistoryPoint(2, 62.4)],
+      networkDown: [monitorHistoryPoint(0, 512), monitorHistoryPoint(1, 4096), monitorHistoryPoint(2, 8192)],
+      networkUp: [monitorHistoryPoint(0, 0), monitorHistoryPoint(1, 1024), monitorHistoryPoint(2, 2048)],
+      cpuTemperature: [monitorHistoryPoint(0, 73.2), monitorHistoryPoint(1, null), monitorHistoryPoint(2, 74.1)],
+    },
+    alerts: {
+      settings: {
+        enabled: true,
+        cpuPercent: 90,
+        temperatureCelsius: 95,
+        memoryPercent: 90,
+        cooldownSeconds: 300,
+        notify: true,
+      },
+      events: [
+        {
+          id: 'a-1',
+          at: '2026-10-23T11:10:00.000Z',
+          metric: 'temperature',
+          value: 96.2,
+          threshold: 95,
+        },
+      ],
+    },
+    fanControl: {
+      state: 'ready',
+      reason: null,
+      message: null,
+      installed: true,
+      running: true,
+      otherControllers: [],
+      mode: 'auto',
+      manualRpm: 2500,
+      curve: {
+        sensor: 'cpuPerformance',
+        points: [
+          { celsius: 40, rpm: 1000 },
+          { celsius: 60, rpm: 2400 },
+          { celsius: 75, rpm: 3600 },
+          { celsius: 90, rpm: 4900 },
+        ],
+      },
+      sensorOptions: ['cpuPerformance', 'cpuEfficiency', 'gpu', 'ssd'],
+      appliedRpm: null,
+      lastAppliedAt: null,
+      minRpm: 1000,
+      maxRpm: 4900,
+      presets: [
+        { id: 'auto', name: 'auto', builtin: true, mode: 'auto' },
+        { id: 'quiet', name: 'quiet', builtin: true, mode: 'manual', rpm: 1000 },
+        {
+          id: 'p-prof',
+          name: '剪辑模式',
+          builtin: false,
+          mode: 'curve',
+          curve: {
+            sensor: 'cpuPerformance',
+            points: [{ celsius: 40, rpm: 1000 }, { celsius: 90, rpm: 4900 }],
+          },
+        },
+      ],
+    },
+  }
+  return Object.assign(value, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The monitor snapshot's sample block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the sample block.
+ */
+function monitorSample(overrides) {
+  return Object.assign({}, monitorSnapshotValue().sample, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The monitor snapshot's fanControl block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the fanControl block.
+ */
+function monitorFanControl(overrides) {
+  return Object.assign({}, monitorSnapshotValue().fanControl, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The monitor snapshot's sensors block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the sensors block.
+ */
+function monitorSensors(overrides) {
+  return Object.assign({}, monitorSnapshotValue().sample.sensors, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The monitor snapshot's alerts block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the alerts block.
+ */
+function monitorAlerts(overrides) {
+  return Object.assign({}, monitorSnapshotValue().alerts, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The monitor snapshot's history block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the history block.
+ */
+function monitorHistory(overrides) {
+  return Object.assign({}, monitorSnapshotValue().history, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * Wait for the next macrotask so queued store promises can settle.
+ *
+ * @returns {Promise<void>} resolution.
+ */
+function flushAsync() {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+/**
+ * Collect elements from a rendered element tree without invoking components.
+ *
+ * @param {any} element - an element returned by `React.createElement`.
+ * @param {(candidate: object) => boolean} predicate - the filter.
+ * @param {object[]} [found] - the accumulator.
+ * @returns {object[]} the matching elements.
+ */
+function collectElements(element, predicate, found = []) {
+  if (element === null || element === undefined) return found
+  if (typeof element === 'string' || typeof element === 'number') return found
+  if (Array.isArray(element)) {
+    for (const child of element) collectElements(child, predicate, found)
+    return found
+  }
+  if (typeof element.type === 'function') return found
+  if (predicate(element)) found.push(element)
+  for (const child of element.children) collectElements(child, predicate, found)
+  return found
 }
 
 
@@ -1456,4 +1718,648 @@ test('the panel renders every transfer state without throwing', () => {
       items: [{ id: 'h1', at: '2026-01-01T00:00:00.000Z', width: 10, height: 10, bytes: 1 }],
     },
   })
+})
+
+test('the status tab is registered after system and localizes its label', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const tree = main.component({ store, t: (key) => key })
+  const tabs = collectElements(tree, (element) => element.props !== null && element.props !== undefined && element.props.role === 'tab')
+  assert.deepEqual(
+    tabs.map((element) => element.props.id),
+    [
+      'dsh-mac-tools-tab-screenshot',
+      'dsh-mac-tools-tab-calculator',
+      'dsh-mac-tools-tab-system',
+      'dsh-mac-tools-tab-monitor',
+      'dsh-mac-tools-tab-transfer',
+    ],
+    'the monitor tab must come right after the system tab',
+  )
+  assert.deepEqual(
+    tabs.map((element) => element.children[0]),
+    ['tab.screenshot', 'tab.calculator', 'tab.system', 'tab.monitor', 'tab.transfer'],
+    'every tab label must go through the locale service',
+  )
+})
+
+test('the monitor dictionaries are complete in both languages', () => {
+  const { state } = applyClient()
+  const { zh, en } = state.locales[0].dictionaries
+  const zhKeys = Object.keys(zh).filter((key) => key === 'tab.monitor' || key.startsWith('monitor.')).sort()
+  const enKeys = Object.keys(en).filter((key) => key === 'tab.monitor' || key.startsWith('monitor.')).sort()
+  assert.deepEqual(zhKeys, enKeys, 'both languages must define the same monitor keys')
+  assert.ok(zhKeys.length > 150, `expected a complete monitor dictionary, got ${zhKeys.length} keys`)
+  for (const key of zhKeys) {
+    assert.equal(typeof zh[key], 'string', `zh.${key} must be a string`)
+    assert.equal(typeof en[key], 'string', `en.${key} must be a string`)
+    assert.notEqual(zh[key].trim(), '', `zh.${key} must not be empty`)
+    assert.notEqual(en[key].trim(), '', `en.${key} must not be empty`)
+  }
+
+  const required = [
+    'tab.monitor',
+    'monitor.toolbarAria',
+    'monitor.sampledAt',
+    'monitor.pause',
+    'monitor.resume',
+    'monitor.interval.option',
+    'monitor.loading',
+    'monitor.error.generic',
+    'monitor.unsupported.title',
+    'monitor.badge.sensors',
+    'monitor.cpu.title',
+    'monitor.cpu.temperature',
+    'monitor.cpu.perCore',
+    'monitor.memory.title',
+    'monitor.memory.app',
+    'monitor.memory.wired',
+    'monitor.memory.compressed',
+    'monitor.memory.cached',
+    'monitor.memory.pressure.normal',
+    'monitor.memory.pressure.warning',
+    'monitor.memory.pressure.critical',
+    'monitor.disk.title',
+    'monitor.network.title',
+    'monitor.network.down',
+    'monitor.network.up',
+    'monitor.battery.title',
+    'monitor.footer.uptime',
+    'monitor.sensors.title',
+    'monitor.sensors.showAll',
+    'monitor.sensors.reason.smc-unavailable',
+    'monitor.sensors.reason.starting',
+    'monitor.sensors.group.cpuPerformance',
+    'monitor.fan.title',
+    'monitor.fan.enable',
+    'monitor.fan.install.intro',
+    'monitor.fan.install.helper',
+    'monitor.fan.install.daemon',
+    'monitor.fan.install.prompt',
+    'monitor.fan.mode.auto',
+    'monitor.fan.mode.manual',
+    'monitor.fan.mode.curve',
+    'monitor.fan.manualHint',
+    'monitor.fan.curve.sensor',
+    'monitor.fan.curve.hint',
+    'monitor.fan.curve.delete',
+    'monitor.fan.curve.reset',
+    'monitor.fan.curve.apply',
+    'monitor.fan.preset.save',
+    'monitor.fan.preset.namePlaceholder',
+    'monitor.fan.restoreAuto',
+    'monitor.fan.uninstall',
+    'monitor.fan.uninstallConfirm',
+    'monitor.fan.otherControllers',
+    'monitor.fan.error.fan_not_ready',
+    'monitor.fan.error.fan_apply_failed',
+    'monitor.processes.title',
+    'monitor.processes.sort.cpu',
+    'monitor.processes.sort.memory',
+    'monitor.processes.kill',
+    'monitor.processes.killArmed',
+    'monitor.processes.killProtected',
+    'monitor.processes.error.kill_invalid_pid',
+    'monitor.processes.error.kill_not_found',
+    'monitor.processes.error.kill_denied',
+    'monitor.alerts.title',
+    'monitor.alerts.enabled',
+    'monitor.alerts.cpu',
+    'monitor.alerts.temperature',
+    'monitor.alerts.memory',
+    'monitor.alerts.cooldown',
+    'monitor.alerts.notify',
+    'monitor.alerts.save',
+    'monitor.alerts.test',
+    'monitor.alerts.events',
+    'monitor.alerts.metric.cpu',
+    'monitor.alerts.metric.temperature',
+    'monitor.alerts.metric.memory',
+  ]
+  for (const key of required) assert.ok(key in zh && key in en, `missing monitor dictionary key: ${key}`)
+
+  // The install copy must disclose what lands on disk and that it is removable.
+  assert.match(zh['monitor.fan.install.helper'], /\/Library\/Application Support\/DSH Mac Tools\//u)
+  assert.match(en['monitor.fan.install.helper'], /\/Library\/Application Support\/DSH Mac Tools\//u)
+  assert.match(zh['monitor.fan.install.prompt'], /管理员密码|卸载/u)
+  assert.match(en['monitor.fan.install.prompt'], /administrator password|uninstall/iu)
+  assert.match(zh['monitor.fan.install.intro'], /特权/u)
+  // The label is Chinese in zh and English in en, not a copy.
+  assert.match(zh['tab.monitor'], /[\u4e00-\u9fff]/u)
+  assert.notEqual(zh['tab.monitor'], en['tab.monitor'])
+})
+
+test('the monitor store polls, dedupes and degrades on failure', async () => {
+  const value = monitorSnapshotValue()
+  let release = null
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint !== 'monitor') return jsonResponse({})
+    return new Promise((resolve) => {
+      release = () => resolve(jsonResponse(value))
+    })
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  const first = store.loadMonitor()
+  const second = store.loadMonitor()
+  assert.equal(first, second, 'a second poll must dedupe onto the in-flight request')
+  await flushAsync()
+  assert.equal(recorder.calls.filter((call) => call.body.endpoint === 'monitor').length, 1)
+  assert.equal(store.getSnapshot().monitor.status, 'loading', 'the first answer shows the skeleton')
+
+  release()
+  assert.equal(await first, true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.monitor.status, 'ready')
+  assert.equal(snapshot.monitor.error, null)
+  assert.equal(snapshot.monitor.value.sample.cpu.usagePercent, 18.2)
+  assert.equal(snapshot.monitor.value.fanControl.state, 'ready')
+
+  // A failed poll keeps the stale snapshot on screen and exposes the failure.
+  const failing = hostRecorder(() => hostErrorResponse('host_unreachable', 'gone'))
+  const failingStore = injectedStore(applyClient({ fetch: failing.fetch }).state)
+  assert.equal(await failingStore.loadMonitor(), false)
+  snapshot = failingStore.getSnapshot()
+  assert.equal(snapshot.monitor.status, 'error')
+  assert.equal(snapshot.monitor.error.code, 'host_unreachable')
+  assert.equal(snapshot.monitor.value, null)
+
+  // A failure after a good snapshot keeps the values and only flags the error.
+  const mixed = hostRecorder((body, call) => (call === 1 ? jsonResponse(value) : hostErrorResponse('host_unreachable', 'gone')))
+  const mixedStore = injectedStore(applyClient({ fetch: mixed.fetch }).state)
+  assert.equal(await mixedStore.loadMonitor(), true)
+  assert.equal(await mixedStore.loadMonitor(), false)
+  snapshot = mixedStore.getSnapshot()
+  assert.equal(snapshot.monitor.status, 'ready')
+  assert.equal(snapshot.monitor.value.sample.cpu.usagePercent, 18.2)
+  assert.equal(snapshot.monitor.error.code, 'host_unreachable')
+})
+
+test('the monitor toolbar state only accepts offered intervals and toggles pause', () => {
+  const store = injectedStore(applyClient().state)
+  assert.equal(store.getSnapshot().monitor.intervalMs, 1000)
+  assert.equal(store.getSnapshot().monitor.paused, false)
+
+  store.setMonitorInterval(2000)
+  assert.equal(store.getSnapshot().monitor.intervalMs, 2000)
+  store.setMonitorInterval(1500)
+  assert.equal(store.getSnapshot().monitor.intervalMs, 2000, 'unsupported intervals are ignored')
+  store.setMonitorInterval(5000)
+  assert.equal(store.getSnapshot().monitor.intervalMs, 5000)
+
+  store.setMonitorPaused(true)
+  assert.equal(store.getSnapshot().monitor.paused, true)
+  store.setMonitorPaused(false)
+  assert.equal(store.getSnapshot().monitor.paused, false)
+})
+
+test('the process section polls the documented endpoints and guards kills', async () => {
+  const rows = [
+    {
+      pid: 1035,
+      name: 'Macs Fan Control',
+      cpuPercent: 12.3,
+      memoryPercent: 1.2,
+      rssBytes: 132512512,
+      user: 'tester',
+      killable: true,
+    },
+    { pid: 1, name: 'launchd', cpuPercent: 0, memoryPercent: 0.1, rssBytes: 1024, user: 'root', killable: false },
+    { pid: 4242, name: 'stubborn', cpuPercent: 3, memoryPercent: 0.2, rssBytes: 2048, user: 'root', killable: true },
+  ]
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitorProcesses') {
+      return jsonResponse({
+        sampledAt: '2026-10-23T11:12:13.000Z',
+        sort: body.payload.sort,
+        count: rows.length,
+        processes: rows,
+      })
+    }
+    if (body.endpoint === 'monitorKill') {
+      if (body.payload.pid === 4242) return hostErrorResponse('kill_denied', 'EPERM')
+      return jsonResponse({ pid: body.payload.pid, name: 'Macs Fan Control', signal: 'SIGTERM' })
+    }
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.loadMonitorProcesses(), false, 'a closed section must not poll')
+  assert.equal(recorder.calls.length, 0)
+
+  store.toggleMonitorProcesses()
+  assert.equal(store.getSnapshot().monitor.processes.open, true)
+  await flushAsync()
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.monitor.processes.value.processes.length, 3)
+  assert.equal(recorder.calls[0].body.endpoint, 'monitorProcesses')
+  assert.equal(recorder.calls[0].body.payload.sort, 'cpu')
+  assert.equal(snapshot.monitor.processes.status, 'ready')
+
+  store.setMonitorProcessSort('memory')
+  assert.equal(store.getSnapshot().monitor.processes.sort, 'memory')
+  await flushAsync()
+  const sortCalls = recorder.calls.filter((call) => call.body.endpoint === 'monitorProcesses')
+  assert.equal(sortCalls[sortCalls.length - 1].body.payload.sort, 'memory')
+
+  assert.equal(await store.killMonitorProcess(1035), false, 'an unarmed kill must be refused')
+  assert.equal(recorder.calls.filter((call) => call.body.endpoint === 'monitorKill').length, 0)
+
+  store.armProcessKill(1035)
+  assert.equal(store.getSnapshot().monitor.processes.armedPid, 1035)
+  assert.equal(await store.killMonitorProcess(1035), true)
+  const killCall = recorder.calls.find((call) => call.body.endpoint === 'monitorKill')
+  assert.ok(killCall, 'the kill must post monitorKill')
+  assert.deepEqual(killCall.body.payload, { pid: 1035 })
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.monitor.processes.armedPid, null)
+  assert.equal(snapshot.monitor.processes.killingPid, null)
+
+  store.armProcessKill(4242)
+  assert.equal(await store.killMonitorProcess(4242), false)
+  assert.equal(store.getSnapshot().monitor.processes.actionError.code, 'kill_denied')
+
+  store.toggleMonitorProcesses()
+  assert.equal(store.getSnapshot().monitor.processes.open, false)
+  const callsBefore = recorder.calls.length
+  assert.equal(await store.loadMonitorProcesses(), false, 'closing the section stops the polling helper')
+  assert.equal(recorder.calls.length, callsBefore)
+})
+
+test('fan actions post the contract payloads and adopt the returned block', async () => {
+  const ready = monitorFanControl()
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'fanInstall' || body.endpoint === 'fanUninstall' || body.endpoint === 'fanApply') {
+      return jsonResponse(ready)
+    }
+    if (body.endpoint === 'fanPreset') {
+      if (body.payload.op === 'save') {
+        return jsonResponse({
+          presets: [{ id: 'p-new', name: body.payload.name, builtin: false, mode: body.payload.mode, rpm: body.payload.rpm }],
+        })
+      }
+      return jsonResponse({ presets: [] })
+    }
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  await store.loadMonitor()
+  assert.equal(store.getSnapshot().monitor.value.fanControl.state, 'ready')
+
+  assert.equal(await store.fanInstall(), true)
+  assert.ok(recorder.calls.some((call) => call.body.endpoint === 'fanInstall'))
+  assert.equal(store.getSnapshot().monitor.fan.pending, null)
+  assert.equal(store.getSnapshot().monitor.fan.error, null)
+
+  assert.equal(await store.fanApply({ mode: 'manual', rpm: 2500 }), true)
+  const applyCall = recorder.calls.find((call) => call.body.endpoint === 'fanApply')
+  assert.ok(applyCall)
+  assert.deepEqual(applyCall.body.payload, { mode: 'manual', rpm: 2500 })
+
+  assert.equal(await store.fanApply({ mode: 'auto' }), true)
+  assert.deepEqual(
+    recorder.calls.filter((call) => call.body.endpoint === 'fanApply')[1].body.payload,
+    { mode: 'auto' },
+  )
+
+  assert.equal(await store.fanSavePreset({ name: '剪辑', mode: 'manual', rpm: 2500 }), true)
+  const savePresetCall = recorder.calls.find((call) => call.body.endpoint === 'fanPreset' && call.body.payload.op === 'save')
+  assert.ok(savePresetCall)
+  assert.deepEqual(savePresetCall.body.payload, { op: 'save', name: '剪辑', mode: 'manual', rpm: 2500 })
+  assert.equal(store.getSnapshot().monitor.value.fanControl.presets[0].id, 'p-new')
+
+  assert.equal(await store.fanDeletePreset('p-new'), true)
+  const deletePresetCall = recorder.calls.find((call) => call.body.endpoint === 'fanPreset' && call.body.payload.op === 'delete')
+  assert.ok(deletePresetCall)
+  assert.deepEqual(deletePresetCall.body.payload, { op: 'delete', id: 'p-new' })
+  assert.deepEqual(store.getSnapshot().monitor.value.fanControl.presets, [])
+
+  assert.equal(await store.fanUninstall(), true)
+  assert.ok(recorder.calls.some((call) => call.body.endpoint === 'fanUninstall'))
+})
+
+test('the fan slider queue keeps only the newest pending write', async () => {
+  const ready = monitorFanControl()
+  let releaseFirst = null
+  let applyCount = 0
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint !== 'fanApply') return jsonResponse(monitorSnapshotValue())
+    applyCount += 1
+    if (applyCount === 1) {
+      return new Promise((resolve) => {
+        releaseFirst = () => resolve(jsonResponse(ready))
+      })
+    }
+    return jsonResponse(ready)
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  await store.loadMonitor()
+
+  const first = store.fanApply({ mode: 'manual', rpm: 2400 })
+  assert.equal(await store.fanApply({ mode: 'manual', rpm: 2600 }), false, 'the second write is queued, not stacked')
+  releaseFirst()
+  assert.equal(await first, true)
+  await flushAsync()
+  const payloads = recorder.calls.filter((call) => call.body.endpoint === 'fanApply').map((call) => call.body.payload)
+  assert.deepEqual(payloads, [{ mode: 'manual', rpm: 2400 }, { mode: 'manual', rpm: 2600 }])
+  assert.equal(store.getSnapshot().monitor.fan.pending, null)
+})
+
+test('alert settings and the test notification go through the Host', async () => {
+  const saved = {
+    settings: {
+      enabled: false,
+      cpuPercent: 80,
+      temperatureCelsius: 100,
+      memoryPercent: 85,
+      cooldownSeconds: 600,
+      notify: false,
+    },
+    events: [],
+  }
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'monitorAlertSave') return jsonResponse(saved)
+    if (body.endpoint === 'monitorAlertTest') return jsonResponse({ notified: true })
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  await store.loadMonitor()
+
+  const result = await store.saveMonitorAlerts({ enabled: false, cpuPercent: 80 })
+  assert.equal(result.ok, true)
+  assert.equal(result.settings.cpuPercent, 80)
+  const saveCall = recorder.calls.find((call) => call.body.endpoint === 'monitorAlertSave')
+  assert.ok(saveCall)
+  assert.deepEqual(saveCall.body.payload, { enabled: false, cpuPercent: 80 })
+  assert.equal(store.getSnapshot().monitor.value.alerts.settings.cpuPercent, 80)
+  assert.equal(store.getSnapshot().monitor.alerts.saving, false)
+
+  const testResult = await store.testMonitorAlerts()
+  assert.equal(testResult.ok, true)
+  assert.equal(testResult.notified, true)
+  assert.ok(recorder.calls.some((call) => call.body.endpoint === 'monitorAlertTest'))
+  assert.equal(store.getSnapshot().monitor.alerts.testing, false)
+})
+
+test('the monitor tab renders every documented state without throwing', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+
+  const renderWith = (monitorPatch, label) => {
+    const next = Object.assign({}, base, {
+      monitor: Object.assign({}, base.monitor, monitorPatch),
+    })
+    store.getSnapshot = () => next
+    assert.doesNotThrow(
+      () => renderElementTree(main.component({ store, t })),
+      `rendering the status tab with ${label} must not throw`,
+    )
+  }
+
+  const readyValue = monitorSnapshotValue()
+  renderWith({}, 'the first-answer skeleton')
+  renderWith({ status: 'loading', value: null, error: null }, 'loading')
+  renderWith({
+    status: 'error',
+    value: null,
+    error: { code: 'host_unreachable', message: 'gone', details: {} },
+  }, 'the first-answer error')
+  renderWith({ status: 'ready', value: readyValue }, 'a ready snapshot')
+  renderWith({ status: 'ready', value: readyValue, paused: true, intervalMs: 2000 }, 'paused at 2 s')
+  renderWith({
+    status: 'ready',
+    value: readyValue,
+    error: { code: 'host_unreachable', message: 'went away', details: {} },
+  }, 'a stale-snapshot error')
+
+  // Non-macOS: the whole tab collapses to the unsupported card.
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      capabilities: {
+        platform: 'other',
+        sensors: { supported: false, reason: 'unsupported-platform' },
+        fanControl: { supported: false, reason: 'unsupported-platform' },
+        battery: false,
+        processes: false,
+      },
+    }),
+  }, 'a non-macOS platform')
+
+  // Defensive nulls: SMC unavailable, no battery, null temperature history.
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      sample: monitorSample({
+        cpu: Object.assign({}, monitorSample().cpu, { temperatureCelsius: null, perCorePercent: [] }),
+        sensors: monitorSensors({
+          available: true,
+          reason: 'starting',
+          groups: {},
+          readings: [],
+        }),
+        battery: null,
+      }),
+      history: monitorHistory({ cpuTemperature: [monitorHistoryPoint(0, null), monitorHistoryPoint(1, null)] }),
+    }),
+  }, 'sensors still starting up')
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      sample: monitorSample({
+        cpu: Object.assign({}, monitorSample().cpu, { temperatureCelsius: null }),
+        sensors: monitorSensors({
+          available: false,
+          reason: 'smc-unavailable',
+          groups: {
+            cpuPerformance: null,
+            cpuEfficiency: null,
+            gpu: null,
+            ssd: null,
+            memory: null,
+            wifi: null,
+            battery: null,
+            ambient: null,
+          },
+          readings: [],
+        }),
+      }),
+    }),
+  }, 'SMC unavailable')
+
+  // Battery present, including nullable health/cycle fields.
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      sample: monitorSample({
+        battery: {
+          percent: 72,
+          charging: true,
+          pluggedIn: true,
+          timeRemainingMinutes: null,
+          healthPercent: null,
+          cycleCount: null,
+        },
+      }),
+    }),
+  }, 'a battery with unknown health')
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      sample: monitorSample({
+        battery: {
+          percent: 31,
+          charging: false,
+          pluggedIn: false,
+          timeRemainingMinutes: 95,
+          healthPercent: 88,
+          cycleCount: 210,
+        },
+      }),
+    }),
+  }, 'a discharging battery')
+
+  // Fan control: every documented state.
+  for (const fanState of ['not-installed', 'installing', 'unavailable', 'error', 'ready']) {
+    const fanControl = monitorFanControl({
+      state: fanState,
+      installed: fanState === 'ready' || fanState === 'error',
+      running: fanState === 'ready',
+      reason: fanState === 'unavailable'
+        ? 'swift-missing'
+        : (fanState === 'error' ? 'cancelled' : (fanState === 'not-installed' ? 'not-installed' : null)),
+      message: fanState === 'error' ? 'the operator cancelled the dialog' : null,
+      mode: fanState === 'ready' ? 'manual' : 'auto',
+      appliedRpm: fanState === 'ready' ? 2600 : null,
+      lastAppliedAt: fanState === 'ready' ? '2026-10-23T11:11:00.000Z' : null,
+      otherControllers: fanState === 'ready'
+        ? [{ name: 'Macs Fan Control', pid: 1035 }]
+        : [],
+    })
+    renderWith({
+      status: 'ready',
+      value: monitorSnapshotValue({ fanControl }),
+    }, `fanControl.state=${fanState}`)
+  }
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      fanControl: monitorFanControl({ state: 'error', installed: true, reason: 'daemon-unreachable', message: 'socket timeout' }),
+    }),
+  }, 'a daemon-unreachable error')
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      fanControl: { state: 'ready', installed: true, running: true, error: null, presets: [] },
+    }),
+  }, 'a sparse fanControl block')
+  renderWith({ status: 'ready', value: monitorSnapshotValue({ fanControl: null }) }, 'a missing fanControl block')
+
+  // Process ranking: expanded with rows, then failed, then empty.
+  const processRows = {
+    sampledAt: '2026-10-23T11:12:13.000Z',
+    sort: 'cpu',
+    count: 3,
+    processes: [
+      { pid: 1035, name: 'Macs Fan Control', cpuPercent: 12.3, memoryPercent: 1.2, rssBytes: 132512512, user: 'tester', killable: true },
+      { pid: 1, name: 'launchd', cpuPercent: 0, memoryPercent: 0.1, rssBytes: 1024, user: 'root', killable: false },
+      { pid: 300, name: 'kernel_task', cpuPercent: 5, memoryPercent: 0.4, rssBytes: 4096, user: 'root' },
+    ],
+  }
+  renderWith({
+    status: 'ready',
+    value: readyValue,
+    processes: Object.assign({}, base.monitor.processes, {
+      open: true,
+      status: 'ready',
+      value: processRows,
+      sort: 'cpu',
+      armedPid: 1035,
+      killingPid: null,
+      actionError: null,
+      error: null,
+    }),
+  }, 'an expanded ranking with an armed kill')
+  renderWith({
+    status: 'ready',
+    value: readyValue,
+    processes: Object.assign({}, base.monitor.processes, {
+      open: true,
+      status: 'ready',
+      value: processRows,
+      actionError: { code: 'kill_denied', message: 'EPERM', details: {} },
+      error: { code: 'host_unreachable', message: 'stale read', details: {} },
+    }),
+  }, 'a ranking with action and list errors')
+  renderWith({
+    status: 'ready',
+    value: readyValue,
+    processes: Object.assign({}, base.monitor.processes, {
+      open: true,
+      status: 'error',
+      value: null,
+      error: { code: 'host_unreachable', message: 'gone', details: {} },
+    }),
+  }, 'a failed ranking')
+  renderWith({
+    status: 'ready',
+    value: readyValue,
+    processes: Object.assign({}, base.monitor.processes, {
+      open: true,
+      status: 'ready',
+      value: Object.assign({}, processRows, { processes: [], count: 0 }),
+    }),
+  }, 'an empty ranking')
+
+  // Alerts: every metric in the event list, plus a missing block.
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      alerts: monitorAlerts({
+        events: [
+          { id: 'e1', at: '2026-10-23T11:10:00.000Z', metric: 'cpu', value: 96.2, threshold: 90 },
+          { id: 'e2', at: '2026-10-23T11:09:00.000Z', metric: 'temperature', value: 99.1, threshold: 95 },
+          { id: 'e3', at: '2026-10-23T11:08:00.000Z', metric: 'memory', value: 91, threshold: 90 },
+        ],
+      }),
+    }),
+  }, 'alert events for all three metrics')
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({ alerts: null }),
+  }, 'a missing alerts block')
+})
+
+test('the monitor source and stylesheet keep the bundle constraints', () => {
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorOverview'), 'the overview grid must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorCurveSvg'), 'the curve editor must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorProcessRow'), 'the process ranking must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorAlertGrid'), 'the alert form must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorSection'), 'the status sections must be styled')
+  assert.ok(CLIENT_SOURCE.includes('prefers-reduced-motion:reduce'), 'the status tab must respect reduced motion')
+
+  for (const endpoint of [
+    'monitor',
+    'monitorProcesses',
+    'monitorKill',
+    'monitorAlertSave',
+    'monitorAlertTest',
+    'fanInstall',
+    'fanUninstall',
+    'fanApply',
+    'fanPreset',
+  ]) {
+    assert.ok(CLIENT_SOURCE.includes(`'${endpoint}'`), `the status tab must consume the ${endpoint} endpoint`)
+  }
+  assert.ok((CLIENT_SOURCE.match(/new AbortController\(/gu) || []).length >= 4, 'polling effects must own an AbortController')
+  assert.ok(CLIENT_SOURCE.includes('killable'), 'the Host computed killable flag must guard the kill action')
+  assert.equal(CLIENT_SOURCE.includes('setInterval'), true)
+  assert.equal(CLIENT_SOURCE.includes('document.body'), false)
+  assert.equal((CLIENT_SOURCE.match(/require\('/gu) || []).length, 1)
 })

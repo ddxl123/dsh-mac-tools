@@ -1,7 +1,7 @@
 {
   "name": "dsh-mac-tools",
-  "version": "0.2.2",
-  "description": "DeepSeek Harness plugin: a local macOS toolbox panel — QQ-style screenshot capture with crop and annotations, a calculator, phone transfer (QR-code LAN page for text/files/images), clipboard and system information",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness plugin: a local macOS toolbox panel — QQ-style screenshot capture with crop and annotations, a calculator, phone transfer (QR-code LAN page for text/files/images), clipboard, system information, and a 运行状态 / Status dashboard (CPU, memory, disk, network, battery, SMC temperatures and fans, process ranking, threshold alerts) with Macs Fan Control style fan-speed control",
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -18,7 +18,15 @@
     "phone-transfer",
     "file-transfer",
     "qrcode",
-    "lan"
+    "lan",
+    "state",
+    "monitor",
+    "system-monitor",
+    "fan-control",
+    "temperature",
+    "sensors",
+    "alerts",
+    "processes"
   ],
   "license": "MIT",
   "author": "long0521",
@@ -60,7 +68,7 @@
   },
   "scripts": {
     "test": "node --test test/",
-    "check": "node --check src/index.js && node --check src/config.js && node --check src/capture.js && node --check src/windows.js && node --check src/calc.js && node --check src/system.js && node --check src/store.js && node --check src/ops.js && node --check src/route.js && node --check src/visibility.js && node --check src/hotkey.js && node --check src/pin.js && node --check src/history.js && node --check src/selection.js && node --check src/transfer.js && node --check src/transfer-qr.js && node --check src/transfer-page.js && node --check client/index.js && node --test test/"
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/capture.js && node --check src/windows.js && node --check src/calc.js && node --check src/system.js && node --check src/store.js && node --check src/ops.js && node --check src/route.js && node --check src/visibility.js && node --check src/hotkey.js && node --check src/pin.js && node --check src/history.js && node --check src/selection.js && node --check src/transfer.js && node --check src/transfer-qr.js && node --check src/transfer-page.js && node --check src/swift.js && node --check src/smc.js && node --check src/fans.js && node --check src/metrics.js && node --check src/processes.js && node --check src/alerts.js && node --check src/monitor.js && node --check client/index.js && node --test test/"
   },
   "dsh": {
     "bundle": {
@@ -76,7 +84,7 @@
     },
     "plugin": {
       "title": "Mac Tools",
-      "summary": "A local macOS toolbox panel: QQ-style screenshot capture with crop and annotations, a calculator, phone transfer (scan a QR code to exchange text, files and photos with a phone on the same Wi-Fi), clipboard and system information. Panel-only; it registers no agent tools."
+      "summary": "A local macOS toolbox panel: QQ-style screenshot capture with crop and annotations, a calculator, phone transfer, clipboard and system information, plus a 运行状态 / Status dashboard (CPU, memory, disk, network, battery, SMC temperatures and fans, process ranking, threshold alerts) with fan-speed control. Panel-only; it registers no agent tools."
     }
   }
 }

@@ -9,6 +9,7 @@
 - **手机互传**——手机和 Mac 连同一个 Wi-Fi，用手机相机扫二维码，就能用浏览器收发文本、文件、照片；不用装 App，文件不出局域网。
 - **剪贴板**——在面板或智能体里读写 macOS 文本剪贴板。
 - **系统信息**——系统版本、CPU、内存、磁盘、电池、运行时间，既有面板卡片也有对应工具。
+- **运行状态**——类 App Store 应用 **State** 的实时监控：CPU/内存/磁盘/网络/电池曲线、SMC 温度与风扇、进程排行、阈值告警；以及类 **Macs Fan Control** 的风扇转速控制（自动 / 手动转速 / 温度曲线 / 预设），首次启用需一次性管理员授权。
 
 全部在本机完成。这是一个**纯面板插件**：只在左侧栏增加 **Mac 工具箱** 入口，**不向智能体注册任何工具**。
 
@@ -66,6 +67,16 @@ dsh plugin --profile desktop add /绝对路径/dsh-mac-tools
 
 系统版本、架构、主机名、CPU 型号与核心数、内存占用条、根磁盘容量、电池（台式机无电池时隐藏）与运行时间。页面可见时每 10 秒刷新；同样的数据也可通过工具获取。
 
+### 运行状态页
+
+一块类 App Store 应用 **State** 的实时监控面板，外加类 **Macs Fan Control** 的风扇控制。所有数据都由 Host 在本机采样，不出机器。
+
+- **总览卡片**——CPU 占用（用户/系统/空闲图例、每核小柱、两分钟面积图）与芯片当前温度；内存（可用/共、应用/联动/压缩/缓存拆分与 macOS 内存压力）；APFS 数据卷；网络上下行双折线；电池（有电池时）；开机时间。采样间隔可选 1 / 2 / 5 秒，也可暂停。
+- **温度传感器**——从 SMC 读取 CPU 性能核/能效核、GPU、SSD、内存、Wi-Fi 的温度组最大值，并可展开查看全部可读传感器键；旁边同时显示风扇实际/目标转速与 SMC 的最小/最大值。读取不需要额外权限。
+- **风扇控制**——自动、手动转速（滑杆严格限制在风扇自身的 SMC 上下限内）、温度曲线（选传感器，拖动 2–8 个点做线性插值）；内置预设（**自动 / 静音 / 平衡 / 性能 / 满速**）并可保存自定义预设，随时可点「恢复系统自动」。首次启用会**弹出一次**管理员密码框：面板会安装一个极小的 root 助手（`/Library/Application Support/DSH Mac Tools/fan/fan-daemon`）和一个 LaunchDaemon（`local.dsh.mac-tools.fan`）；该助手只接受安装者本人的风扇指令、把目标转速夹到 SMC 上下限、在保持模式期间持续重写目标，并在模式切换、Host 退出、socket 断开或 12 秒无指令时自动恢复系统自动控制。同一张卡片里的「卸载风扇控制」会恢复自动控制并删除助手与 LaunchDaemon。无风扇的机型（如 MacBook Air）只显示监控、不显示控制。有两件事始终拥有最终决定权：持续高负载时 macOS 热管理可能把风扇拉到高于设定值（在本机 >100°C 时实测如此）；同时运行的其它风扇控制软件（如 Macs Fan Control）会在两次写入之间覆盖目标转速——卡片会给出提示，退出那个软件后控制权就回到本面板。
+- **进程排行**——按 CPU 或内存排序的进程列表，结束进程需要两步内联确认；Host 会拒绝 `pid` 1、自身进程与非自有进程。
+- **阈值告警**——CPU %、温度 °C、内存 % 三档阈值、冷却时间与可选的 macOS 通知；设置持久化在插件状态目录（`~/.dsh/dsh-mac-tools/monitor/alerts.json`），最近告警事件留在卡片里；「测试通知」会发一条系统通知，便于确认通知权限。
+
 ### 手机互传页
 
 一个只在局域网内工作的 Mac ↔ 手机中转站。点「开启手机互传」后，Host 会临时起一个 HTTP 监听，显示**二维码**（和 URL），并开始倒计时。用手机**系统相机**扫码（或手动输入 URL）即可打开一个免登录网页——不用装 App、不用账号、不走云。
@@ -95,6 +106,12 @@ bundle 行支持以下配置（写在 `cordis.patch.yml` 或之后的 patch 层�
 | `transferSessionMinutes` | `30` | 一次手机互传会话的有效期，到期后二维码失效、监听停止。 |
 | `transferMaxFileMB` | `512` | 手机单次上传文件大小上限（MB）。 |
 | `transferAutoCopyText` | `false` | 收到手机文本时自动复制到 macOS 剪贴板。 |
+| `monitorSampleMs` | `1000` | 「运行状态」页 Host 侧采样间隔（毫秒，500–10000）。软件指标最多每 2 秒采集一次，面板轮询频率可以更快或更慢。 |
+| `alertCpuPercent` | `90` | 首次运行的 CPU 占用告警阈值（%）。面板运行时可改，持久化的选择优先于该默认值。 |
+| `alertTemperatureCelsius` | `95` | 首次运行的温度告警阈值（°C，取 SMC 温度组）。 |
+| `alertMemoryPercent` | `90` | 首次运行的内存占用告警阈值（%）。 |
+| `alertCooldownSeconds` | `300` | 同一指标两次告警之间的最短间隔（秒）。 |
+| `alertNotify` | `true` | 告警触发时是否发 macOS 通知。 |
 
 ```yaml
 - id: mac-tools
@@ -105,9 +122,9 @@ bundle 行支持以下配置（写在 `cordis.patch.yml` 或之后的 patch 层�
 
 ## 实现说明
 
-- **原生小助手**（`assets/`）：`hotkey.swift` 监听系统级快捷键，`pin.swift` 把贴图显示为浮动的 AppKit 窗口，`qrcode.swift` 用 CoreImage 生成手机互传二维码；三者首次用 `swiftc` 编译并缓存到临时目录。
-- **Host 半端**（`src/`）：在 Connection 的 `/api` 通道上注册受认证的 `/api/dsh-mac-tools` 路由，维护临时截图注册表，用 `/usr/sbin/screencapture` 截图、用 `/usr/bin/osascript` 获取窗口列表、写图片剪贴板和打开文件选择框。手机互传监听（`src/transfer.js`）是一个独立的、按需启动的 `node:http` 服务，只在会话期间绑定局域网；它提供手机网页和上传/下载 API，收发索引存在插件状态目录。不注册任何智能体工具。
-- **Client 半端**（`client/index.js`）：一个由 `window.__ModuleLoader__` 加载的纯 React bundle，注册左侧栏入口和 `main` 面板，渲染四个分页，只通过上面的路由与 Host 通信。
+- **原生小助手**（`assets/`）：`hotkey.swift` 监听系统级快捷键，`pin.swift` 把贴图显示为浮动的 AppKit 窗口，`qrcode.swift` 用 CoreImage 生成手机互传二维码；三者首次用 `swiftc` 编译并缓存到临时目录。`smc-core.swift` 是共享的只读 IOKit `AppleSMC` 传输层；`state.swift` 是常驻采样器，每个采样输出一行 JSON（风扇 + 全部可读温度键）；`fan-daemon.swift` 是风扇卡片安装的特权助手——只提供 Unix socket JSON 的 `F0Md`/`F0Tg` 写入，目标转速夹在 SMC 上下限内，并带 12 秒看门狗自动恢复系统自动控制。
+- **Host 半端**（`src/`）：在 Connection 的 `/api` 通道上注册受认证的 `/api/dsh-mac-tools` 路由，维护临时截图注册表，用 `/usr/sbin/screencapture` 截图、用 `/usr/bin/osascript` 获取窗口列表、写图片剪贴板和打开文件选择框。「运行状态」页是一条采样循环（`src/monitor.js`），底层是 `src/metrics.js`（CPU/内存/磁盘/网络/电池）、`src/smc.js`（采样器子进程）、`src/alerts.js`（阈值）与 `src/fans.js`（风扇控制与 socket 协议）。手机互传监听（`src/transfer.js`）是一个独立的、按需启动的 `node:http` 服务，只在会话期间绑定局域网；它提供手机网页和上传/下载 API，收发索引存在插件状态目录。不注册任何智能体工具。
+- **Client 半端**（`client/index.js`）：一个由 `window.__ModuleLoader__` 加载的纯 React bundle，注册左侧栏入口和 `main` 面板，渲染五个分页，只通过上面的路由与 Host 通信。
 - 截图引擎是对系统工具的一层薄封装——区域/窗口选择、取消、窗口点选都是 macOS 原生行为，不是重新实现。
 
 ```
@@ -119,8 +136,10 @@ GET  /api/dsh-mac-tools?inbox=<id>   → 手机发来文件的字节
 
 `?inbox=` 预览只对安全的栅格图片（`png`、`jpeg`、`gif`、`webp`、`avif`、`bmp`）内联返回；其它文件一律以 `application/octet-stream` 附件返回，手机上传的 HTML/SVG 因此不可能在 Web UI 源上执行。
 
-端点：`status`、`windows`、`capture`、`cancelCapture`、`copy`、`save`、`calc`、`clipboard`、`system`、`reveal`，以及手机互传的
-`transferStatus`、`transferStart`、`transferStop`、`transferInbox`、`transferOutbox`。返回
+端点：`status`、`windows`、`capture`、`cancelCapture`、`copy`、`save`、`calc`、`clipboard`、`system`、`reveal`，手机互传的
+`transferStatus`、`transferStart`、`transferStop`、`transferInbox`、`transferOutbox`，运行状态的
+`monitor`、`monitorProcesses`、`monitorKill`、`monitorAlertSave`、`monitorAlertTest`，以及风扇控制的
+`fanInstall`、`fanUninstall`、`fanApply`、`fanPreset`。返回
 `{ ok: true, value }` 或 `{ ok: false, error: { code, message, details } }`。
 
 手机访问的是它自己的临时服务 `http://<Mac局域网IP>:<端口>/t/<token>/`（页面、`api/state`、`api/text`、`api/upload`、`api/items/<id>`），
