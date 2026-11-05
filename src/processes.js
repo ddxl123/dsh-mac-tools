@@ -27,7 +27,22 @@ const PS_TIMEOUT_MS = 5_000
 export const MAX_PROCESS_NAME_LENGTH = 64
 
 /** Accepted process sort keys. */
-export const PROCESS_SORTS = Object.freeze(['cpu', 'memory'])
+export const PROCESS_SORTS = Object.freeze(['cpu', 'memory', 'rss', 'name', 'pid'])
+
+/** Sort keys whose natural direction is descending (busiest / largest first). */
+const DESCENDING_SORTS = new Set(['cpu', 'memory', 'rss'])
+
+/**
+ * The default direction for one sort key: the resource columns read "biggest
+ * first", while name and pid read ascending. The panel toggles the direction
+ * on a second click on the same header.
+ *
+ * @param {string} sort - one of {@link PROCESS_SORTS}.
+ * @returns {'asc' | 'desc'} the default direction.
+ */
+export function defaultProcessOrder(sort) {
+  return DESCENDING_SORTS.has(sort) ? 'desc' : 'asc'
+}
 
 /** Rows returned when the caller does not specify a limit. */
 export const DEFAULT_PROCESS_LIMIT = 15
@@ -101,6 +116,33 @@ export function parseProcessList(text) {
 }
 
 /**
+ * Compare two parsed rows for one sort key and direction. Every comparator
+ * falls back to the pid, so equal values keep a stable, predictable order.
+ *
+ * @param {object} left - a parsed row.
+ * @param {object} right - a parsed row.
+ * @param {string} sort - one of {@link PROCESS_SORTS}.
+ * @param {'asc' | 'desc'} order - the direction.
+ * @returns {number} the comparator result.
+ */
+function compareRows(left, right, sort, order) {
+  let result
+  if (sort === 'name') {
+    result = left.name.localeCompare(right.name)
+  } else if (sort === 'pid') {
+    result = left.pid - right.pid
+  } else if (sort === 'memory') {
+    result = left.memoryPercent - right.memoryPercent || left.rssBytes - right.rssBytes
+  } else if (sort === 'rss') {
+    result = left.rssBytes - right.rssBytes || left.memoryPercent - right.memoryPercent
+  } else {
+    result = left.cpuPercent - right.cpuPercent || left.memoryPercent - right.memoryPercent
+  }
+  if (order === 'desc') result = -result
+  return result !== 0 ? result : left.pid - right.pid
+}
+
+/**
  * List the busiest processes for the panel's ranking.
  *
  * Every row carries an additive `killable` flag (not part of the documented
@@ -109,37 +151,26 @@ export function parseProcessList(text) {
  * and different from the Host process itself.
  *
  * @param {object} [options] - request options.
- * @param {'cpu' | 'memory'} [options.sort] - ranking key, `cpu` by default.
+ * @param {'cpu' | 'memory' | 'rss' | 'name' | 'pid'} [options.sort] - ranking key, `cpu` by default.
+ * @param {'asc' | 'desc'} [options.order] - direction; defaults by key (cpu/memory/rss descending, name/pid ascending).
  * @param {number} [options.limit] - maximum rows (default 15, capped at 100).
  * @param {(command: string, args: string[], options: { timeoutMs: number }) => Promise<{ stdout: string }>} [options.run] - command runner, `runProcess` by default.
- * @returns {Promise<{ sort: 'cpu' | 'memory', count: number, processes: object[] }>} the §3.2 value without `sampledAt`.
+ * @returns {Promise<{ sort: string, order: 'asc' | 'desc', count: number, processes: object[] }>} the §3.2 value without `sampledAt`.
  * @throws {Error} when `ps` cannot be executed or exits non-zero.
  */
-export async function listProcesses({ sort = 'cpu', limit = DEFAULT_PROCESS_LIMIT, run = runProcess } = {}) {
+export async function listProcesses({ sort = 'cpu', order = undefined, limit = DEFAULT_PROCESS_LIMIT, run = runProcess } = {}) {
   const rankedBy = PROCESS_SORTS.includes(sort) ? sort : 'cpu'
+  const direction = order === 'asc' || order === 'desc' ? order : defaultProcessOrder(rankedBy)
   const maxRows = Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_PROCESS_LIMIT) : DEFAULT_PROCESS_LIMIT
   const { stdout } = await run(PS, ['-Ao', 'pid=,pcpu=,pmem=,rss=,user=,comm='], { timeoutMs: PS_TIMEOUT_MS })
   const rows = parseProcessList(stdout)
-  rows.sort((left, right) => {
-    if (rankedBy === 'memory') {
-      const byMemory = right.memoryPercent - left.memoryPercent
-      if (byMemory !== 0) return byMemory
-      const byRss = right.rssBytes - left.rssBytes
-      if (byRss !== 0) return byRss
-      return left.pid - right.pid
-    }
-    const byCpu = right.cpuPercent - left.cpuPercent
-    if (byCpu !== 0) return byCpu
-    const byMemory = right.memoryPercent - left.memoryPercent
-    if (byMemory !== 0) return byMemory
-    return left.pid - right.pid
-  })
+  rows.sort((left, right) => compareRows(left, right, rankedBy, direction))
   const currentUser = os.userInfo().username
   const processes = rows.slice(0, maxRows).map((row) => ({
     ...row,
     killable: row.pid > 1 && row.pid !== process.pid && row.user === currentUser,
   }))
-  return { sort: rankedBy, count: processes.length, processes }
+  return { sort: rankedBy, order: direction, count: processes.length, processes }
 }
 
 /**

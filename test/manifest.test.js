@@ -114,7 +114,7 @@ test('the host half exports the Cordis plugin contract without absolute paths', 
   assert.match(index, /connection\.fetch\.register/u)
   // This project is panel-only: it must not register any model-facing tools.
   assert.doesNotMatch(index, /tools\.register|registerTools|mac_screenshot|mac_calculator/u)
-  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js', 'src/transfer.js', 'src/transfer-qr.js', 'src/transfer-page.js']) {
+  for (const relative of ['src/index.js', 'src/route.js', 'src/ops.js', 'src/capture.js', 'src/windows.js', 'src/calc.js', 'src/system.js', 'src/store.js', 'src/config.js', 'src/files.js', 'src/transfer.js', 'src/transfer-qr.js', 'src/transfer-page.js']) {
     const source = read(relative)
     assert.doesNotMatch(source, /\/Users\/|file:\/\//u, `${relative} must not embed absolute paths`)
   }

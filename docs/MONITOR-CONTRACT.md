@@ -41,7 +41,18 @@
   (board/ambient-ish), `TW0P` (Wi-Fi), `TB*` (battery, absent on a Mac mini),
   plus `TP*`, `TR*`, `Ts*`, `TV*`, `Tz*` (zeros) and other minor keys.
   Only offer a summary group when at least one real reading exists.
-- `IOReport` / HID sensor APIs are **not** used; SMC alone is enough.
+  `Ta0p` (the board/intake sensor) feeds the `ambient` summary group; it sits
+  inside the chassis and therefore reads warmer than the room. Its unpopulated
+  siblings (`Ta00`, `Ta04`, …) read 0 and must not create a group.
+- `IOReport` is used **only** for power/energy (the `Energy Model` group: per
+  cluster `CPU Energy` / `GPU` / `ANE` / `DRAM` counters, read through
+  `/usr/lib/libIOReport.dylib`, no root). Temperatures and fan speeds stay
+  SMC-only; HID sensor APIs are still not used.
+- The Energy Model group has 175 channels; the four power blocks are cumulative
+  energy counters in mJ (`GPU Energy` is an nJ duplicate of `GPU` — match the
+  exact names so energy is never counted twice). Power = Δenergy / Δt with a
+  monotonic clock; a missing library (Intel Macs) drops the `power` key instead
+  of failing the sampler.
 
 ## 2. Architecture
 
@@ -55,6 +66,7 @@ New Host modules (each owns its file; do not edit files outside your scope):
 | `src/smc.js` | Lead | spawn/restart the sampler, cache the latest sample |
 | `src/fans.js` | Lead | fan control state machine, install/uninstall, curve math |
 | `src/monitor.js` | Lead | 1 s ticker, ring buffers, snapshot assembly, alerts/fan wiring |
+| `src/energy.js` | Lead | persisted daily energy ledger (`monitor/energy.json`), local-date bucketing and range queries |
 | `src/metrics.js` | **metrics-host** | pure parsers + software-metric collection |
 | `src/processes.js` | **metrics-host** | `ps` parsing, listing, kill |
 | `src/alerts.js` | **metrics-host** | threshold evaluation with cooldown + settings |
@@ -167,6 +179,16 @@ use 1 / 2 / 5 s). No payload.
       "items": [
         { "index": 0, "actualRpm": 2220, "targetRpm": 2221, "minRpm": 1000, "maxRpm": 4900, "mode": "forced" } // "auto" | "forced" | "unknown"
       ]
+    },
+    "power": {                          // SoC power from IOReport; available=false when the helper has no IOReport
+      "available": true,
+      "cpuW": 13.7,                     // CPU cluster (P + E cores)
+      "gpuW": 3.6,
+      "aneW": 0.0,
+      "dramW": 2.5,
+      "socW": 19.8,                     // cpuW + gpuW + aneW + dramW
+      "energyWh": 0.0421,               // energy accumulated since `since`, 4 decimals
+      "since": "2026-10-23T11:00:00.000Z" // null until the first power sample
     }
   },
   "history": {                          // ring buffer, oldest → newest, max 60 entries; drives the sparklines
@@ -175,7 +197,18 @@ use 1 / 2 / 5 s). No payload.
     "memory":            [ { "t": 1761220333000, "value": 62.9 } ],
     "networkDown":       [ { "t": 1761220333000, "value": 512 } ],
     "networkUp":         [ { "t": 1761220333000, "value": 0 } ],
-    "cpuTemperature":    [ { "t": 1761220333000, "value": 73.2 } ]
+    "cpuTemperature":    [ { "t": 1761220333000, "value": 73.2 } ],
+    "power":             [ { "t": 1761220333000, "value": 19.8 } ],
+    "fanRpm":            [ { "t": 1761220333000, "value": 2220 } ] // fan 0 actual RPM
+  },
+  "energy": {                           // persisted daily energy ledger (local dates)
+    "todayWh": 12.3,                    // today's accumulated energy, 4 decimals
+    "totalWh": 456.7,                   // all retained days, 4 decimals
+    "days": 42,                         // retained days with data
+    "since": "2026-10-01",              // first retained local date; null when empty
+    "pricePerKwh": 0.56,                // 元/度, persisted operator setting (default 0.5)
+    "costToday": 0.0069,                // 元, todayWh / 1000 × pricePerKwh, 4 decimals
+    "costTotal": 0.2558                 // 元, totalWh / 1000 × pricePerKwh, 4 decimals
   },
   "alerts": {
     "settings": {
@@ -225,12 +258,18 @@ unavailable (skip points with `value === null` when drawing).
 
 ### 3.2 `monitorProcesses` → process ranking
 
-Payload: `{ "sort": "cpu" }` where `sort` is `"cpu"` (default) or `"memory"`.
+Payload: `{ "sort": "cpu", "order": "desc" }` where `sort` is one of `"cpu"`
+(default), `"memory"`, `"rss"`, `"name"` or `"pid"`, and `order` is `"asc"` or
+`"desc"` (omitted → the key's natural direction: cpu/memory/rss descending,
+name/pid ascending). Unknown keys fall back to `cpu` + its default direction.
+The panel sends an explicit direction so a second click on the same column
+header reverses it.
 
 ```jsonc
 {
   "sampledAt": "…",
   "sort": "cpu",
+  "order": "desc",
   "count": 15,
   "processes": [
     { "pid": 1035, "name": "Macs Fan Control", "cpuPercent": 12.3,
@@ -302,7 +341,14 @@ Payload, exactly one of:
 re-applies the target every 2 s; in `curve` mode it computes the target from the
 chosen sensor every 2 s through the smoothing/hysteresis/slew-rate governor
 described in §5 (so `fanControl.appliedRpm` changes only when the smoothed
-temperature justifies it). Returns the updated `fanControl` block. Errors:
+temperature justifies it). Returns the updated `fanControl` block.
+
+Panel mapping (semantic, not wire): the panel's **自动** control sends
+`mode:"curve"` (automatic control *by the temperature curve*) — it never sends
+the bare `mode:"auto"`, which is reserved for the explicit 恢复系统自动 action.
+`fanControl.mode` therefore reads `"curve"` while 自动 is active, `"manual"` for
+手动, and `"auto"` only after the fan was handed back to the SMC (the panel
+labels that state 系统自动). Errors:
 `fan_not_ready` (not installed / daemon unreachable), `fan_apply_failed`
 (daemon refused the write; `details.reason` carries the daemon reason).
 
@@ -314,6 +360,43 @@ Returns `{ "presets": [ … ] }` (same shape as §3.1). Applying a preset is
 `fanApply` with the preset's mode/rpm/curve; built-in preset ids are fixed
 (`auto`, `quiet`, `balanced`, `performance`, `max`) and cannot be deleted.
 Presets persist in the plugin state directory.
+
+### 3.9 `monitorEnergy` → daily energy for a date range
+
+Payload: `{ "from": "2026-10-30", "to": "2026-11-05" }` (local dates,
+`YYYY-MM-DD`). Both fields are optional: `to` defaults to today and `from`
+defaults to `to − 6 days`. Dates must be real calendar dates, `from ≤ to`, and
+the range must not exceed 366 days (otherwise `invalid_request`).
+
+```jsonc
+{
+  "from": "2026-10-30",
+  "to": "2026-11-05",
+  "days": [                          // oldest → newest; every day of the range, wh 0 when no data
+    { "date": "2026-10-30", "wh": 8.1 },
+    { "date": "2026-10-31", "wh": 9.4 }
+  ],
+  "totalWh": 56.7,                   // sum over the range
+  "averageWh": 8.1,                  // totalWh / number of days in the range
+  "pricePerKwh": 0.56,               // 元/度 in force for this answer
+  "totalCost": 0.0318,               // 元, totalWh / 1000 × pricePerKwh, 4 decimals
+  "averageCost": 0.0045              // 元, averageWh / 1000 × pricePerKwh, 4 decimals
+}
+```
+
+The ledger is persisted at `<state>/monitor/energy.json` (local date → Wh,
+400-day retention) and only accumulates while the plugin is loaded; it
+survives plugin reloads and DSH restarts. `snapshot.energy` is the cheap
+summary the 1 s `monitor` poll carries; the range query is separate so a
+custom range does not bloat every snapshot.
+
+### 3.10 `energyPriceSave` → persist the electricity price
+
+Payload: `{ "pricePerKwh": 0.56 }` — 元 per kWh. Must be a finite number in
+`[0, 100]` (otherwise `invalid_request` with `field: "pricePerKwh"`). Returns
+the full `energy` snapshot block after persisting (same shape as §3.1
+`snapshot.energy`). The setting lives in the energy ledger file and survives
+plugin reloads and DSH restarts; the default is `0.5` 元/度.
 
 ## 4. Host module interfaces (written by `metrics-host`)
 
@@ -374,18 +457,30 @@ tab working. Read `docs/CLIENT-CONTRACT.md` first — the same hard constraints
 apply (no imports besides `react`, no JSX, one injected stylesheet, `dshMacTools…`
 class prefix, theme tokens only for chrome, zh/en dictionaries complete).
 
-- Add `'monitor'` to `TABS` between `'calculator'` and `'transfer'`; the old
-  `'system'` tab is gone (its unique facts merged into this tab, see below).
-  zh label `运行状态`, en label `Status`. Snapshot state lives in the existing
-  module-level store (`state.tab`, etc.) with a new `monitor` slice.
+- `'monitor'` is the **first tab and the panel's default landing page**
+  (`TABS = ['monitor', 'screenshot', 'files', 'calculator', 'transfer']`, the
+  store starts with `tab: 'monitor'`); the old `'system'` tab is gone (its
+  unique facts merged into this tab, see below). zh label `运行状态`, en label
+  `Status`. Snapshot state lives in the existing module-level store
+  (`state.tab`, etc.) with a new `monitor` slice.
 - Poll `monitor` with `host.post('monitor', {})` only while the tab is visible;
   dedupe in-flight requests, abort on unmount/tab switch, pause with the panel's
   visibility handling. Default interval 1 s, selectable 1 / 2 / 5 s; a Pause
   toggle stops polling (charts freeze). `monitorProcesses` polls every 3 s only
   while the Processes section is expanded.
-- Layout (top → bottom), State-inspired but in the panel's flat card style:
-  1. **Toolbar**: sample time, interval selector, pause/resume, manual refresh,
-     small availability badges.
+- Layout: a **left sub-page rail** plus the selected sub-page on the right (a
+  two-column shell; below 760 px the rail becomes a horizontal scrollable row).
+  The rail is a vertical button list — 概览 / 传感器 / 能耗 / 风扇 / 进程 / 告警 /
+  系统 — with the active entry highlighted and `aria-current="page"`. Only the
+  selected sub-page renders, so the tab is no longer one long scroll. Mapping:
+  概览 → the global toolbar + overview cards (items 1–2); 传感器 → items 3 + 4;
+  能耗 → item 5; 系统 → item 6; 风扇 → item 7; 进程 → item 8 (selecting it
+  opens the ranking and starts its 3 s poll, leaving it stops the poll);
+  告警 → item 9. The stale-error notice stays global above the shell.
+- Sections (top → bottom inside a sub-page), State-inspired but in the panel's
+  flat card style:
+  1. **Toolbar** (global, above the shell): sample time, interval selector,
+     pause/resume, manual refresh, small availability badges.
   2. **Overview cards** (responsive two-column grid; memory/disk/battery/
      network/uptime live here):
      - CPU: chip name, big temperature, usage area sparkline (history.cpu),
@@ -395,6 +490,15 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
      - Disk: volume name, available/total, usage bar.
      - Network: local IP, ↓/↑ rates with a two-line sparkline
        (history.networkDown/Up).
+     - Power (only when `sample.power.available`): big SoC wattage
+       (`sample.power.socW`), a sparkline of history.power, a CPU/GPU/DRAM/ANE
+       breakdown, and the accumulated energy (`energyWh` since `since`).
+     - Fan (only when `sample.fans.items` is non-empty): the compact control —
+       live RPM, an RPM slider committed on release (`fanApply` manual), and the
+       自动 / 全速 quick actions. 自动 applies the temperature curve (the Host's
+       `curve` mode with the reported curve/sensor), never the SMC's own auto. When fan control is not ready the card shows
+       the current RPM plus a link to the 风扇 sub-page instead of duplicating
+       the install flow.
      - Battery card only when `sample.battery` is non-null (percent, charging,
        remaining, health).
      - A footer line with uptime and host model.
@@ -402,7 +506,36 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
      CPU 能效核 / GPU / SSD / 内存 / Wi-Fi), then a collapsible "全部传感器"
      list (key + °C, grouped by key prefix family, sorted by temperature desc).
      Show the SMC reason when `sensors.available` is false.
-  4. **系统信息** section (merged from the former separate System tab, which is
+  4. **功耗与散热** section (renders only when `sample.power.available`):
+     - Readouts computed from the paired history rings: 热阻 =
+       (CPU 温度 − 环境温度) / CPU 功耗 in °C/W and 风扇效率 = 风扇转速 /
+       SoC 功耗 in RPM/W; each shows an em dash when no usable pair exists.
+     - Two small scatter charts built from the same history indices (null
+       points skipped): 功耗 → CPU 温度 (°C) and 功耗 → 风扇转速 (RPM), each
+       with a least-squares trend line and axis range labels.
+     - When the power block is unavailable, show the localized
+       `monitor.power.unavailable` hint instead of the charts.
+  5. **能耗统计** section (after 功耗与散热):
+     - Range selector (segmented): 今天 / 近 7 天 / 近 30 天 / 自定义. Custom
+       mode reveals two native `<input type="date">` fields (from/to) plus an
+       应用 button; the applied range drives the query.
+     - Headline: the range total in 度 (kWh = wh / 1000, three decimals) and a
+       sub-line 今日 X 度 · 累计 Y 度 from `snapshot.energy`, plus the estimated
+       cost (≈ ¥X.XX at the persisted 元/度 price).
+     - Price editor: a numeric input bound to `snapshot.energy.pricePerKwh`
+       (元/度, step 0.01) with a 保存 button calling `energyPriceSave`; the
+       committed value refreshes the cost lines without a full reload.
+     - Aggregation selector: 按天 / 按周 / 按月. Defaults by range length (day
+       up to 31 days, week up to 120, month beyond); weeks start on Monday and
+       buckets are summed client-side from the daily `monitorEnergy` answer.
+     - Bar chart: one bar per bucket (SVG), y = kWh, bucket labels under the
+       ends, and a `title` tooltip per bar with the bucket label, kWh and cost.
+       Buckets without data render as zero.
+     - The panel queries `monitorEnergy` for the selected range while the tab is
+       visible (on range change and every 30 s); loading/error/empty states are
+       localized inline, and an unavailable power block shows the same hint as
+       the 功耗与散热 section.
+  6. **系统信息** section (merged from the former separate System tab, which is
      removed): system/hardware facts (`sample.host`: OS version + arch,
      hostname, model identifier, chip, total/P/E cores, uptime), runtime facts
      (`version`, `snapshot.host.value.hostPid`, `sampledAt`, save folder from
@@ -412,7 +545,7 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
      Memory/disk/battery/network stay in the overview cards, not duplicated
      here. Renders only once `monitor.value` exists; degrades to 未知 when the
      `status` answer has not arrived yet.
-  5. **风扇控制** section:
+  7. **风扇控制** section:
      - `state === "not-installed"`: explanation + **启用风扇控制** button; the
        copy must disclose what will be installed (a root helper in
        `/Library/Application Support/DSH Mac Tools/` plus a LaunchDaemon, used
@@ -420,7 +553,8 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
        macOS asks for the administrator password once. While the call is
        pending show a waiting/authorizing state.
      - `state === "ready"`: per-fan actual/target/min/max row; mode segmented
-       control 自动 / 手动 / 温度曲线; manual slider (step 10) with a numeric
+       control 自动 / 手动 (自动 drives the temperature curve; the SMC's own
+       automatic control is the 恢复系统自动 action); manual slider (step 10) with a numeric
        readout **committed on release** (debounced ~250 ms), curve editor (see
        below), preset chip row (built-ins + custom; save current / delete
        custom), "恢复系统自动" button, and a footer showing whether the setting
@@ -442,11 +576,14 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
        client-side.
      - An uninstall button (danger styling, confirm inline) that restores auto
        control and removes the root helper.
-  6. **进程排行** section: CPU / 内存 sort segment, top ~12 rows with CPU%,
-     memory%, RSS, and a kill action guarded by a two-step inline confirm
-     (first click arms "确认结束?", second click within 3 s kills; errors map to
-     localized messages). Mark the Host's own processes as not killable.
-  7. **告警** section: enabled switch, three numeric fields (CPU %, 温度 °C,
+  8. **进程排行** section: **clickable column headers** sort by 进程名 / PID /
+     CPU / 内存 / RSS (a second click on the active column reverses the
+     direction; resource columns start descending, name/pid ascending), top ~12
+     rows with PID, CPU%, memory%, RSS, and a kill action guarded by a two-step
+     inline confirm (first click arms "确认结束?", second click within 3 s
+     kills; errors map to localized messages). Mark the Host's own processes as
+     not killable.
+  9. **告警** section: enabled switch, three numeric fields (CPU %, 温度 °C,
      内存 %), cooldown field (秒), notify switch, 保存 + 测试通知 buttons, and
      the recent events list (localized time, metric name, value/threshold).
 - All request failures go through the existing `describeFailure`-style
@@ -457,6 +594,11 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
   token plus fixed palette colours for the second network series are fine) and
   `vector-effect="non-scaling-stroke"`. Respect `prefers-reduced-motion` (no
   transitions on the SVG).
+- **Every chart carries a timeline.** Sparklines render a start / middle / end
+  clock row from their history ring's `t` values; the energy bar chart labels
+  the first, middle and last bucket dates; the correlation scatters print the
+  sample window (`monitor.power.scatter.timeRange`). A chart without its time
+  context is a contract violation.
 - Numbers format through `Intl.NumberFormat`/locale-aware helpers already used
   elsewhere in the file; sizes as `GB/MB`, rates as `KB/s`, temperatures as
   `72.3 °C`.
@@ -470,6 +612,8 @@ class prefix, theme tokens only for chrome, zh/en dictionaries complete).
 | SMC unavailable / AppleSMC open fails | software metrics work; sensor/fan cards show the reason; alerts for temperature disabled |
 | no fan (MacBook Air) | fan card says "no fan"; `fanControl.supported = false` |
 | no battery (desktop) | battery card omitted |
+| IOReport unavailable (or non-Apple-Silicon) | power card and 功耗与散热 section hidden; 能耗统计 shows the unavailable hint; temperature/fan cards unaffected |
+| energy ledger missing or corrupt | `snapshot.energy` reports zeros and 能耗统计 shows the empty state; the monitor keeps sampling |
 | helper not installed | fan card shows the install CTA; monitors still work |
 | daemon unreachable after install | `state: "error"`, reason `daemon-unreachable`, retry + reinstall actions |
 | user cancels admin dialog | `state: "error"`, reason `cancelled`, CTA stays available |

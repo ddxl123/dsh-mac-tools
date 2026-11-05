@@ -124,10 +124,14 @@ a `cancelled` capture.
 ## Panel UX spec
 
 Full-height panel like the todo panel (`.dshTodoPage` pattern): page → scroll container → content
-`max-width: 980px; margin: 0 auto; padding: 0 clamp(24px,4vw,48px) 48px`, heading with 42px brand-mark
-box + h1 + subtitle + a small Host-status pill on the right.
+`box-sizing: border-box; width: 100%; max-width: none; margin: 0; padding: 0 clamp(18px, 2.6vw, 40px) 48px`,
+heading with 42px brand-mark box + h1 + subtitle + a small Host-status pill on the right. (The content column
+used to be a centered 980 px column; the panel is now full-width on every tab, and `overflow-x` is guarded so
+inner tables cannot push the page sideways.)
 
-Tabs (role=tablist, under the heading): **截图 / 计算器 / 系统信息**. Active tab uses
+Tabs (role=tablist, under the heading): **截图 / 文件 / 计算器 / 运行状态 / 手机互传** (this section originally
+described the first three-tab layout; see `docs/FILES-CONTRACT.md`, `docs/MONITOR-CONTRACT.md` and
+`docs/TRANSFER-CONTRACT.md` for the current tabs). Active tab uses
 `var(--dsw-alias-interactive-bg-hover)` + `label-primary`; inactive `label-tertiary`.
 
 ### Tab 1 — Screenshot (main feature, QQ-like)

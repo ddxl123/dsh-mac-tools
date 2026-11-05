@@ -10,15 +10,19 @@
  *
  * It also owns the panel's disk contract: a 60-entry history ring for the
  * sparklines, the threshold monitor (`src/alerts.js`) and the macOS
- * notification for fired alerts. Every producer degrades independently — a
- * missing SMC, an unreadable battery or a refused `df` only blanks its own
- * field.
+ * notification for fired alerts. The daily energy ledger (`src/energy.js`)
+ * buckets the same SoC power into persisted local-date watt-hours for the
+ * 能耗统计 section. Every producer degrades independently — a missing SMC, an
+ * unreadable battery or a refused `df` only blanks its own field.
  *
  * @module dsh-mac-tools/monitor
  */
 
+import { join } from 'node:path'
+
 import { runProcess } from './capture.js'
 import { AlertMonitor, ALERT_DEFAULTS } from './alerts.js'
+import { EnergyLedger } from './energy.js'
 import { FanController } from './fans.js'
 import { collectSoftwareMetrics } from './metrics.js'
 import { killProcess, listProcesses } from './processes.js'
@@ -43,6 +47,18 @@ export const MONITOR_ALERT_DEFAULTS = Object.freeze({
 const METRIC_LABELS = Object.freeze({ cpu: 'CPU 占用', temperature: '温度', memory: '内存' })
 
 /**
+ * Round the energy counter to the contract's four decimals. The per-tick
+ * multiplication leaves float noise behind, and rounding is cheaper than
+ * letting the panel's energy figure jitter every second.
+ *
+ * @param {number} value - watt-hours.
+ * @returns {number} the rounded watt-hours.
+ */
+function roundEnergy(value) {
+  return Math.round(value * 10_000) / 10_000
+}
+
+/**
  * Build the AppleScript that shows one macOS notification.
  *
  * @param {string} title - notification title.
@@ -64,6 +80,26 @@ export function describeAlert(event) {
   const label = METRIC_LABELS[event.metric] ?? event.metric
   const unit = event.metric === 'temperature' ? '°C' : '%'
   return `${label} ${event.value}${unit} 超过阈值 ${event.threshold}${unit}`
+}
+
+/**
+ * The power block when IOReport is unavailable (or the platform has no SMC).
+ * It keeps the full shape so the panel can branch on `available` alone instead
+ * of guarding every field.
+ *
+ * @returns {object} the empty power block.
+ */
+function unavailablePower() {
+  return {
+    available: false,
+    cpuW: null,
+    gpuW: null,
+    aneW: null,
+    dramW: null,
+    socW: null,
+    energyWh: 0,
+    since: null,
+  }
 }
 
 /**
@@ -120,6 +156,7 @@ function placeholderSample(at) {
       sentTotalBytes: 0,
     },
     battery: null,
+    power: unavailablePower(),
   }
 }
 
@@ -167,6 +204,14 @@ export class MonitorService {
     this.softwareIntervalMs = Math.max(MIN_SOFTWARE_INTERVAL_MS, this.sampleMs)
     this.notify = notify ?? ((event) => this.notifyOperator(event))
 
+    // The daily ledger outlives the session counter: it buckets each tick's
+    // watt-hours by local date so the panel can report kWh over date ranges.
+    this.energyLedger = new EnergyLedger({
+      statePath: join(stateDirectory, 'energy.json'),
+      now,
+      warn,
+    })
+
     this.sampler = sampler ?? new SmcSampler({
       intervalMs: Math.max(500, Math.min(2000, this.sampleMs)),
       warn,
@@ -202,6 +247,12 @@ export class MonitorService {
     this.started = false
     this.disposed = false
     this.sampleCount = 0
+    /** Watt-hours accumulated since `energySince`; the panel's energy counter. */
+    this.energyWh = 0
+    /** ISO timestamp of the first tick that carried a usable SoC wattage. */
+    this.energySince = null
+    /** Tick clock of the previous energy accumulation (null before the first). */
+    this.lastEnergyAt = null
     this.history = {
       capacity: HISTORY_CAPACITY,
       cpu: [],
@@ -209,6 +260,10 @@ export class MonitorService {
       networkDown: [],
       networkUp: [],
       cpuTemperature: [],
+      // `power` and `fanRpm` pair with `cpuTemperature` so the panel can chart
+      // thermal resistance (°C/W) and fan efficiency (RPM/W) client-side.
+      power: [],
+      fanRpm: [],
     }
   }
 
@@ -228,10 +283,40 @@ export class MonitorService {
     this.timer.unref?.()
   }
 
+  /**
+   * Integrate one tick's SoC power into the energy counter.
+   *
+   * Called on every sampling tick, before `collectOnce`'s throttle branch: the
+   * wattage rides on the SMC sample, so it is readable even while the software
+   * metrics are skipped, and skipping those ticks would leave holes in the
+   * counter. The 60 s clamp stops a suspended machine or a stalled ticker from
+   * inventing a large lump of energy on the next tick.
+   *
+   * @param {number} nowMs - tick clock, epoch milliseconds.
+   * @returns {void}
+   */
+  accumulateEnergy(nowMs) {
+    if (this.platform !== 'darwin') return
+    const socW = this.sampler.latest()?.power?.socW
+    if (!Number.isFinite(socW) || socW < 0) return
+    const seconds = this.lastEnergyAt === null
+      ? 0
+      : Math.min(60, Math.max(0, (nowMs - this.lastEnergyAt) / 1000))
+    const wh = socW * seconds / 3600
+    this.energyWh += wh
+    // Same watt-hours, second consumer: the ledger buckets them by local date
+    // and persists them, while `energyWh` stays the session counter the panel's
+    // power card shows.
+    this.energyLedger.record(wh, nowMs)
+    if (this.energySince === null) this.energySince = new Date(nowMs).toISOString()
+    this.lastEnergyAt = nowMs
+  }
+
   /** Collect one software sample (guarded against overlap) and evaluate alerts. */
   async collectOnce() {
     if (this.disposed || this.collecting) return
     const nowMs = this.now()
+    this.accumulateEnergy(nowMs)
     if (this.software !== null && nowMs - this.softwareAt < this.softwareIntervalMs) {
       // Still feed the fan curve every tick; the software metrics can wait.
       this.fan.tick(this.sampler.latest())
@@ -274,6 +359,12 @@ export class MonitorService {
       ? (samplerStatus.state === 'starting' ? 'starting' : samplerStatus.reason)
       : null
     const cpuTemperature = summary.groups.cpuPerformance ?? summary.groups.cpuEfficiency ?? null
+    // Power is the IOReport half of the SMC sample; absent means the helper has
+    // no Energy Model access (or this is not macOS), so the block degrades as a
+    // whole rather than showing a half-filled breakdown.
+    const latestPower = smc?.power ?? null
+    const powerAvailable = latestPower !== null && typeof latestPower === 'object' && !Array.isArray(latestPower)
+    const watts = (value) => (Number.isFinite(value) ? value : null)
     return {
       ...base,
       at,
@@ -296,6 +387,18 @@ export class MonitorService {
           mode: fan.mode,
         })),
       },
+      power: powerAvailable
+        ? {
+            available: true,
+            cpuW: watts(latestPower.cpuW),
+            gpuW: watts(latestPower.gpuW),
+            aneW: watts(latestPower.aneW),
+            dramW: watts(latestPower.dramW),
+            socW: watts(latestPower.socW),
+            energyWh: roundEnergy(this.energyWh),
+            since: this.energySince,
+          }
+        : unavailablePower(),
     }
   }
 
@@ -317,6 +420,8 @@ export class MonitorService {
     push('networkDown', sample.network.receivedBytesPerSecond)
     push('networkUp', sample.network.sentBytesPerSecond)
     push('cpuTemperature', sample.cpu.temperatureCelsius)
+    push('power', sample.power?.socW ?? null)
+    push('fanRpm', this.sampler.latest()?.fans?.[0]?.actualRpm ?? null)
   }
 
   /** @returns {object} the panel's `monitor` snapshot (contract §3.1). */
@@ -357,10 +462,40 @@ export class MonitorService {
         networkDown: [...this.history.networkDown],
         networkUp: [...this.history.networkUp],
         cpuTemperature: [...this.history.cpuTemperature],
+        power: [...this.history.power],
+        fanRpm: [...this.history.fanRpm],
       },
+      energy: this.energyLedger.snapshot(),
       alerts: this.alerts.snapshot(),
       fanControl: fanStatus,
     }
+  }
+
+  /**
+   * Daily energy statistics for a local-date range (contract §3.9).
+   *
+   * The ops layer validates panel input; the ledger owns the "today / last
+   * seven days" defaults so direct callers get them too.
+   *
+   * @param {{ from?: string, to?: string }} [range] - inclusive local `YYYY-MM-DD` dates.
+   * @returns {{ from: string, to: string, days: { date: string, wh: number }[], totalWh: number, averageWh: number, pricePerKwh: number, totalCost: number, averageCost: number }} the range statistics.
+   */
+  energy({ from, to } = {}) {
+    return this.energyLedger.query({ from, to })
+  }
+
+  /**
+   * Persist the operator's electricity price (contract §3.10).
+   *
+   * The dispatcher validates the value first; the ledger still refuses an
+   * invalid direct call, in which case this returns `null` instead of a
+   * snapshot block.
+   *
+   * @param {number} pricePerKwh - 元 per kWh, finite and within `[0, 100]`.
+   * @returns {{ todayWh: number, totalWh: number, days: number, since: string | null, pricePerKwh: number, costToday: number, costTotal: number } | null} the refreshed energy block.
+   */
+  saveEnergyPrice(pricePerKwh) {
+    return this.energyLedger.setPrice(pricePerKwh)
   }
 
   /** @returns {object} the fan status on a platform without SMC access. */
@@ -391,8 +526,8 @@ export class MonitorService {
    * @param {{ sort?: string, limit?: number }} [options] - sort and limit.
    * @returns {Promise<object>} the contract's `monitorProcesses` value.
    */
-  async processes({ sort = 'cpu', limit = 15 } = {}) {
-    const value = await listProcesses({ sort, limit, run: this.run })
+  async processes({ sort = 'cpu', order = undefined, limit = 15 } = {}) {
+    const value = await listProcesses({ sort, order, limit, run: this.run })
     return { sampledAt: new Date(this.now()).toISOString(), ...value }
   }
 
@@ -506,6 +641,14 @@ export class MonitorService {
       this.sampler.dispose()
     } catch (failure) {
       this.warn('could not stop the SMC sampler', failure)
+    }
+    // Flush the daily ledger last and in its own guard: losing the session's
+    // energy history is not worth failing the rest of the shutdown over, and
+    // the sampler/fan failures above must not skip it.
+    try {
+      this.energyLedger.dispose()
+    } catch (failure) {
+      this.warn('could not persist the energy ledger', failure)
     }
   }
 }

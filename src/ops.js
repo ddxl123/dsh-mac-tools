@@ -27,8 +27,20 @@ import {
   showNotification,
 } from './capture.js'
 import { CalcError, evaluate } from './calc.js'
+import {
+  addDays,
+  DEFAULT_QUERY_DAYS,
+  daySpan,
+  isDateKey,
+  isPricePerKwh,
+  MAX_PRICE_PER_KWH,
+  MIN_PRICE_PER_KWH,
+  todayDateKey,
+} from './energy.js'
+import { FilesError } from './files.js'
 import { HotkeyValidationError } from './hotkey.js'
 import { TransferError } from './transfer.js'
+import { defaultProcessOrder, PROCESS_SORTS } from './processes.js'
 import { listWindows, selectWindow } from './windows.js'
 import { API_PATH } from './route.js'
 import { MAX_SHOT_BYTES } from './store.js'
@@ -153,10 +165,11 @@ export function decodePngBase64(input) {
  * @param {{ add: Function, list: Function, get: Function, read: Function, remove: Function, clear: Function, maxItems: number }} [deps.history] - durable screenshot history (injectable for tests).
  * @param {import('./transfer.js').TransferServer} [deps.transfer] - phone-transfer service (injectable for tests).
  * @param {import('./monitor.js').MonitorService} [deps.monitor] - status monitor service (injectable for tests).
+ * @param {import('./files.js').FileBrowser} [deps.files] - local file browser behind the Files tab (injectable for tests).
  * @param {() => Promise<string[]>} [deps.chooseFiles] - native multi-select file picker (injectable for tests).
  * @returns {{ dispatch: (endpoint: string, payload?: object, signal?: AbortSignal) => Promise<any>, captureFromHotkey: () => Promise<object>, addPinnedEditor: (record: object) => object | null, cancelCapture: () => { cancelled: boolean }, status: () => object, dispose: () => void }} the dispatcher.
  */
-export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history, transfer, monitor, chooseFiles }) {
+export function createOps({ config, store, capture, warn, version = '0.1.0', clipboard, finder, visibility, windows, sound = playSystemSound, notify = showNotification, hotkey, pins, history, transfer, monitor, files, chooseFiles }) {
   const clipboardApi = clipboard ?? { copyPngToClipboard, copyTextToClipboard, readTextClipboard }
   const revealFile = finder ?? revealInFinder
   const windowsApi = windows ?? { listWindows, selectWindow }
@@ -667,6 +680,93 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
   }
 
   /**
+   * The local file browser, when this Host mounted one.
+   *
+   * @returns {import('./files.js').FileBrowser} the service.
+   */
+  function requireFiles() {
+    if (files === undefined || files === null) {
+      throw new OpsError('unsupported', 'the Files tab is not available in this build')
+    }
+    return files
+  }
+
+  /** Stable failure codes the Files layer emits, forwarded verbatim. */
+  const FILES_ERROR_CODES = new Set([
+    'files_invalid_request',
+    'files_outside_roots',
+    'files_not_found',
+    'files_not_directory',
+    'files_not_file',
+    'files_binary',
+    'files_exists',
+    'files_invalid_name',
+    'files_too_large',
+    'files_unsupported_preview',
+    'files_thumbnail_unavailable',
+    'files_compress_failed',
+    'files_cross_device',
+    'files_permission_denied',
+    'files_failed',
+  ])
+
+  /**
+   * Translate a file-browser failure into the dispatcher's error type.
+   *
+   * @param {unknown} failure - thrown value.
+   * @returns {OpsError} the translated failure.
+   */
+  function toFilesOpsError(failure) {
+    if (failure instanceof OpsError) return failure
+    if (failure instanceof FilesError) {
+      const code = FILES_ERROR_CODES.has(failure.code) ? failure.code : 'files_failed'
+      const details = failure.details !== null && typeof failure.details === 'object' ? failure.details : {}
+      return new OpsError(code, failure.message, details)
+    }
+    return new OpsError('files_failed', failure instanceof Error ? failure.message : String(failure))
+  }
+
+  /**
+   * Run one file-browser operation and normalize its failures.
+   *
+   * @param {() => any} operation - operation body.
+   * @returns {Promise<any>} the operation value.
+   */
+  async function filesCall(operation) {
+    try {
+      return await operation()
+    } catch (failure) {
+      throw toFilesOpsError(failure)
+    }
+  }
+
+  /**
+   * Read a non-empty array of path strings from a payload.
+   *
+   * @param {object} payload - request payload.
+   * @param {string} [field] - array field name.
+   * @returns {string[]} the paths.
+   */
+  function requirePathList(payload, field = 'paths') {
+    const value = asObject(payload)[field]
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new OpsError('invalid_request', `${field} must be a non-empty array of paths`, { field })
+    }
+    if (value.length > 500) {
+      throw new OpsError('invalid_request', `${field} carries too many paths`, { field })
+    }
+    /** @type {string[]} */
+    const paths = []
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        throw new OpsError('invalid_request', `${field} must contain non-empty strings`, { field })
+      }
+      paths.push(entry.trim())
+    }
+    return paths
+  }
+
+  /**
    * Open the native multi-select file dialog and return the chosen paths.
    * Cancelling the dialog is a normal outcome, not a failure.
    *
@@ -755,6 +855,171 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
     throw new OpsError('invalid_request', `unknown transferOutbox action ${JSON.stringify(action)}`, { action })
   }
 
+  /**
+   * The Files tab's sidebar: standard places, volumes and recent folders.
+   *
+   * @returns {Promise<object>} the places view.
+   */
+  async function opFilesPlaces() {
+    const places = await filesCall(() => requireFiles().places())
+    return Object.assign({}, places, { showHidden: config.filesShowHidden === true })
+  }
+
+  /**
+   * List one directory for the Files tab.
+   *
+   * @param {object} payload - request payload with `path` and optional sort/order/showHidden.
+   * @returns {Promise<object>} the listing.
+   */
+  async function opFilesList(payload) {
+    const request = asObject(payload)
+    const path = requireString(payload, 'path')
+    return filesCall(() => requireFiles().list({
+      path,
+      sort: typeof request.sort === 'string' ? request.sort : undefined,
+      order: typeof request.order === 'string' ? request.order : undefined,
+      showHidden: typeof request.showHidden === 'boolean' ? request.showHidden : undefined,
+    }))
+  }
+
+  /**
+   * Read one text file for the Files tab preview pane.
+   *
+   * @param {object} payload - request payload with `path` and optional `maxBytes`.
+   * @returns {Promise<object>} the preview text.
+   */
+  async function opFilesRead(payload) {
+    const path = requireString(payload, 'path')
+    const maxBytes = asObject(payload).maxBytes
+    return filesCall(() => requireFiles().readText({
+      path,
+      maxBytes: Number.isInteger(maxBytes) ? maxBytes : undefined,
+    }))
+  }
+
+  /**
+   * Create a folder inside one directory.
+   *
+   * @param {object} payload - request payload with `path` (parent) and `name`.
+   * @returns {Promise<object>} the created folder.
+   */
+  async function opFilesMkdir(payload) {
+    const path = requireString(payload, 'path')
+    const name = requireString(payload, 'name')
+    return filesCall(() => requireFiles().createFolder({ path, name }))
+  }
+
+  /**
+   * Rename one file or folder in place.
+   *
+   * @param {object} payload - request payload with `path` and the new `name`.
+   * @returns {Promise<object>} the renamed entry.
+   */
+  async function opFilesRename(payload) {
+    const path = requireString(payload, 'path')
+    const name = requireString(payload, 'name')
+    return filesCall(() => requireFiles().rename({ path, name }))
+  }
+
+  /**
+   * Move files or folders to the macOS Trash.
+   *
+   * @param {object} payload - request payload with a `paths` array.
+   * @returns {Promise<object>} the per-path outcome.
+   */
+  async function opFilesTrash(payload) {
+    const paths = requirePathList(payload)
+    return filesCall(() => requireFiles().trash({ paths }))
+  }
+
+  /**
+   * Compress files or folders into one zip next to the first item.
+   *
+   * @param {object} payload - request payload with a `paths` array.
+   * @returns {Promise<object>} the created zip.
+   */
+  async function opFilesCompress(payload) {
+    const paths = requirePathList(payload)
+    return filesCall(() => requireFiles().compress({ paths }))
+  }
+
+  /**
+   * Reveal one file or folder in Finder.
+   *
+   * @param {object} payload - request payload with `path`.
+   * @returns {Promise<object>} the outcome.
+   */
+  async function opFilesReveal(payload) {
+    const path = requireString(payload, 'path')
+    return filesCall(() => requireFiles().reveal({ path }))
+  }
+
+  /**
+   * Open one file or folder with its default application.
+   *
+   * @param {object} payload - request payload with `path`.
+   * @returns {Promise<object>} the outcome.
+   */
+  async function opFilesOpen(payload) {
+    const path = requireString(payload, 'path')
+    return filesCall(() => requireFiles().open({ path }))
+  }
+
+  /**
+   * Import files dropped from Finder into one directory.
+   *
+   * @param {object} payload - request payload with `directory` and `files` (`{name, dataBase64}` items).
+   * @returns {Promise<object>} the per-file outcome.
+   */
+  async function opFilesDrop(payload) {
+    const directory = requireString(payload, 'directory')
+    const request = asObject(payload)
+    if (!Array.isArray(request.files) || request.files.length === 0) {
+      throw new OpsError('invalid_request', 'files must be a non-empty array', { field: 'files' })
+    }
+    if (request.files.length > 100) {
+      throw new OpsError('invalid_request', 'at most 100 files can be dropped at once', { field: 'files' })
+    }
+    /** @type {{ name: string, dataBase64: string }[]} */
+    const files = []
+    for (let index = 0; index < request.files.length; index += 1) {
+      const entry = request.files[index]
+      if (entry === null || typeof entry !== 'object') {
+        throw new OpsError('invalid_request', `files[${index}] must be an object`, { field: `files[${index}]` })
+      }
+      const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+      const dataBase64 = typeof entry.dataBase64 === 'string'
+        ? entry.dataBase64
+        : (typeof entry.data === 'string' ? entry.data : '')
+      if (name === '' || dataBase64 === '') {
+        throw new OpsError('invalid_request', `files[${index}] needs a name and base64 data`, { field: `files[${index}]` })
+      }
+      files.push({ name, dataBase64 })
+    }
+    return filesCall(() => requireFiles().drop({ directory, files }))
+  }
+
+  /**
+   * Queue existing files for the phone (the Files tab's "send to phone" action).
+   *
+   * @param {object} payload - request payload with a `paths` array.
+   * @returns {Promise<{ items: object[], count: number }>} the new outbox entries.
+   */
+  async function opFilesSend(payload) {
+    const service = requireTransfer()
+    const paths = requirePathList(payload)
+    /** @type {object[]} */
+    const items = []
+    for (const path of paths) {
+      try {
+        items.push((await service.addFile(path)).item)
+      } catch (failure) {
+        throw toTransferOpsError(failure)
+      }
+    }
+    return { items, count: items.length }
+  }
+
   function opStatus() {
     return {
       version,
@@ -779,6 +1044,7 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         transfer: transfer !== undefined && transfer !== null,
         monitor: monitor !== undefined && monitor !== null,
         fanControl: monitor !== undefined && monitor !== null && process.platform === 'darwin',
+        files: files !== undefined && files !== null,
       },
       hostPid: process.pid,
       at: new Date().toISOString(),
@@ -892,11 +1158,53 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         return systemInfo()
       case 'monitor':
         return await monitorCall(() => requireMonitor().snapshot())
+      case 'monitorEnergy': {
+        const request = asObject(payload)
+        const from = typeof request.from === 'string' ? request.from : undefined
+        const to = typeof request.to === 'string' ? request.to : undefined
+        if (from !== undefined && !isDateKey(from)) {
+          throw new OpsError('invalid_request', 'from must be a local date in YYYY-MM-DD form', { field: 'from' })
+        }
+        if (to !== undefined && !isDateKey(to)) {
+          throw new OpsError('invalid_request', 'to must be a local date in YYYY-MM-DD form', { field: 'to' })
+        }
+        // Validate the effective range as well: the ledger defaults absent
+        // fields to today / today − 6 days, so a lone future `from` or a
+        // decade-wide `to` must be refused here, not silently answered.
+        const end = to ?? todayDateKey()
+        const start = from ?? addDays(end, -(DEFAULT_QUERY_DAYS - 1))
+        if (start > end) {
+          throw new OpsError('invalid_request', 'from must not be after to', { field: 'from' })
+        }
+        if (daySpan(start, end) > 366) {
+          throw new OpsError('invalid_request', 'the date range must not exceed 366 days', { field: 'to' })
+        }
+        return await monitorCall(() => requireMonitor().energy({ from, to }))
+      }
+      case 'energyPriceSave': {
+        const pricePerKwh = asObject(payload).pricePerKwh
+        // `isPricePerKwh` checks `Number.isFinite`, so numeric strings are
+        // refused too: the ledger stores a number and does money arithmetic
+        // with it, and "0.56" would silently turn the 电费 lines into NaN.
+        if (!isPricePerKwh(pricePerKwh)) {
+          throw new OpsError(
+            'invalid_request',
+            `pricePerKwh must be a finite number between ${MIN_PRICE_PER_KWH} and ${MAX_PRICE_PER_KWH}`,
+            { field: 'pricePerKwh' },
+          )
+        }
+        return await monitorCall(() => requireMonitor().saveEnergyPrice(pricePerKwh))
+      }
       case 'monitorProcesses': {
         const request = asObject(payload)
-        const sort = request.sort === 'memory' ? 'memory' : 'cpu'
+        const sort = PROCESS_SORTS.includes(request.sort) ? request.sort : 'cpu'
+        // The panel sends an explicit direction (it toggles on a second click);
+        // a caller that omits it gets the key's natural direction.
+        const order = request.order === 'asc' || request.order === 'desc'
+          ? request.order
+          : defaultProcessOrder(sort)
         const limit = Number.isInteger(request.limit) ? Math.min(50, Math.max(1, request.limit)) : 15
-        return await monitorCall(() => requireMonitor().processes({ sort, limit }))
+        return await monitorCall(() => requireMonitor().processes({ sort, order, limit }))
       }
       case 'monitorKill': {
         const pid = asObject(payload).pid
@@ -934,6 +1242,28 @@ export function createOps({ config, store, capture, warn, version = '0.1.0', cli
         return opTransferInbox(payload)
       case 'transferOutbox':
         return opTransferOutbox(payload)
+      case 'filesPlaces':
+        return await opFilesPlaces()
+      case 'filesList':
+        return await opFilesList(payload)
+      case 'filesRead':
+        return await opFilesRead(payload)
+      case 'filesMkdir':
+        return await opFilesMkdir(payload)
+      case 'filesRename':
+        return await opFilesRename(payload)
+      case 'filesTrash':
+        return await opFilesTrash(payload)
+      case 'filesCompress':
+        return await opFilesCompress(payload)
+      case 'filesReveal':
+        return await opFilesReveal(payload)
+      case 'filesOpen':
+        return await opFilesOpen(payload)
+      case 'filesDrop':
+        return await opFilesDrop(payload)
+      case 'filesSend':
+        return await opFilesSend(payload)
       case 'reveal':
         return opReveal(payload)
       default:

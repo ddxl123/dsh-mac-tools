@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import os from 'node:os'
 
-import { killProcess, listProcesses, parseProcessList } from '../src/processes.js'
+import { defaultProcessOrder, killProcess, listProcesses, parseProcessList } from '../src/processes.js'
 
 /** Recorded-looking `ps -Ao pid=,pcpu=,pmem=,rss=,user=,comm=` output. */
 const PS_OUTPUT = [
@@ -92,6 +92,26 @@ test('lists processes ranked by cpu or memory with killable flags', async () => 
   const byMemory = await listProcesses({ sort: 'memory', run })
   assert.equal(byMemory.sort, 'memory')
   assert.deepEqual(byMemory.processes.map((row) => row.pid), [40, 10, 30, 20, process.pid])
+
+  // The panel's clickable headers sort by rss / name / pid too, and a repeated
+  // click reverses the direction (the Host just obeys the requested order).
+  const byRss = await listProcesses({ sort: 'rss', run })
+  assert.equal(byRss.sort, 'rss')
+  assert.equal(byRss.order, 'desc')
+  assert.deepEqual(byRss.processes.map((row) => row.pid), [40, 10, 30, 20, process.pid])
+  const byName = await listProcesses({ sort: 'name', run })
+  assert.equal(byName.sort, 'name')
+  assert.equal(byName.order, 'asc')
+  assert.deepEqual(byName.processes.map((row) => row.name), ['memory-hog', 'node', 'root-daemon', 'top', 'zsh'])
+  const byPid = await listProcesses({ sort: 'pid', run })
+  assert.equal(byPid.order, 'asc')
+  const ascendingPids = byPid.processes.map((row) => row.pid)
+  assert.deepEqual(ascendingPids, [...ascendingPids].sort((left, right) => left - right))
+  const byCpuAsc = await listProcesses({ sort: 'cpu', order: 'asc', run })
+  assert.equal(byCpuAsc.order, 'asc')
+  assert.deepEqual(byCpuAsc.processes.map((row) => row.pid), [40, 20, 30, 10, process.pid])
+  assert.equal(defaultProcessOrder('cpu'), 'desc')
+  assert.equal(defaultProcessOrder('name'), 'asc')
 
   const limited = await listProcesses({ sort: 'cpu', limit: 2, run })
   assert.equal(limited.count, 2)

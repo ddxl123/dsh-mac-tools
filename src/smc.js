@@ -29,6 +29,11 @@ export const TEMPERATURE_FAMILIES = Object.freeze({
   memory: /^Tm/u,
   wifi: /^TW/u,
   battery: /^TB/u,
+  // `Ta0p` is the board/intake ambient sensor. It reads warmer than the room
+  // (it sits inside the chassis), so the panel labels it as the machine's
+  // ambient rather than the room temperature. Unpopulated siblings (`Ta00`,
+  // `Ta04`, …) read 0 and are dropped by the `celsius > 0` guard below.
+  ambient: /^Ta0/u,
 })
 
 /**
@@ -36,7 +41,7 @@ export const TEMPERATURE_FAMILIES = Object.freeze({
  * space also carries hundreds of calibration / power-delivery sensors (`Tz*`,
  * `TCM*`, `TPD*`, `TR*`, …) that are noise for a person reading temperatures.
  */
-const CURATED_FAMILIES = /^(?:Tp|Te|Tg|TH|Tm|TB|TW)/u
+const CURATED_FAMILIES = /^(?:Tp|Te|Tg|TH|Tm|TB|TW|Ta0[pP])/u
 
 /**
  * @typedef {object} FanReading
@@ -49,11 +54,21 @@ const CURATED_FAMILIES = /^(?:Tp|Te|Tg|TH|Tm|TB|TW)/u
  */
 
 /**
+ * @typedef {object} PowerReading
+ * @property {number | null} cpuW - CPU cluster (P + E cores) power in watts.
+ * @property {number | null} gpuW - GPU power in watts.
+ * @property {number | null} aneW - Neural Engine power in watts.
+ * @property {number | null} dramW - DRAM power in watts.
+ * @property {number | null} socW - total SoC power; the helper's own total when usable, else the sum of the usable component fields.
+ */
+
+/**
  * @typedef {object} SensorSample
  * @property {number} at - epoch milliseconds.
  * @property {number} fanCount - number of fans reported by `FNum`.
  * @property {FanReading[]} fans - one entry per fan.
  * @property {{ key: string, celsius: number }[]} temperatures - every readable temperature key.
+ * @property {PowerReading | null} power - SoC power from IOReport; null when the helper cannot read it.
  */
 
 /**
@@ -64,6 +79,36 @@ const CURATED_FAMILIES = /^(?:Tp|Te|Tg|TH|Tm|TB|TW)/u
  */
 function round1(value) {
   return Math.round(value * 10) / 10
+}
+
+/**
+ * Validate and normalize the helper's IOReport power block. Each field is a
+ * watt value; an unusable field becomes null, and the block itself is dropped
+ * when nothing usable is left. `socW` falls back to the sum of the usable
+ * components so the panel always has a total when it has a breakdown.
+ *
+ * @param {unknown} raw - the helper's `power` value.
+ * @returns {PowerReading | null} the normalized power block, or null when unusable.
+ */
+function normalizePower(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = /** @type {Record<string, unknown>} */ (raw)
+  const watts = (field) => {
+    const number = value[field]
+    if (typeof number !== 'number' || !Number.isFinite(number) || number < 0 || number > 1000) return null
+    return round1(number)
+  }
+  const cpuW = watts('cpuW')
+  const gpuW = watts('gpuW')
+  const aneW = watts('aneW')
+  const dramW = watts('dramW')
+  const components = [cpuW, gpuW, aneW, dramW].filter((entry) => entry !== null)
+  const rawSocW = watts('socW')
+  const socW = rawSocW !== null
+    ? rawSocW
+    : (components.length === 0 ? null : round1(components.reduce((sum, entry) => sum + entry, 0)))
+  if (cpuW === null && gpuW === null && aneW === null && dramW === null && socW === null) return null
+  return { cpuW, gpuW, aneW, dramW, socW }
 }
 
 /**
@@ -120,7 +165,7 @@ export function normalizeSample(raw) {
     ? Number(value.fanCount)
     : fans.length
 
-  return { at, fanCount, fans, temperatures }
+  return { at, fanCount, fans, temperatures, power: normalizePower(value.power) }
 }
 
 /**
@@ -161,11 +206,22 @@ export function summarizeTemperatures(readings) {
   return { groups, readings: visible, hidden: Math.max(0, list.length - visible.length) }
 }
 
-/** @returns {string[]} the Swift sources the sampler helper is built from. */
+/**
+ * The sampler links the IOReport power shim (`ioreport.c`), whose declarations
+ * reach `state.swift` through this bridging header.
+ *
+ * @returns {string} absolute path of the sampler's bridging header.
+ */
+export function samplerHeaderPath() {
+  return fileURLToPath(new URL('../assets/ioreport.h', import.meta.url))
+}
+
+/** @returns {string[]} the sources the sampler helper is built from: the shared SMC core, the main file and the IOReport C shim. */
 export function samplerSources() {
   return [
     fileURLToPath(new URL('../assets/smc-core.swift', import.meta.url)),
     fileURLToPath(new URL('../assets/state.swift', import.meta.url)),
+    fileURLToPath(new URL('../assets/ioreport.c', import.meta.url)),
   ]
 }
 
@@ -174,7 +230,7 @@ export function samplerSources() {
  * probes and live tests; the panel's normal path is {@link SmcSampler}.
  *
  * @param {object} [options] - probe options.
- * @param {string[]} [options.sourcePaths] - helper Swift sources.
+ * @param {string[]} [options.sourcePaths] - helper sources (Swift plus the IOReport C shim).
  * @param {string} [options.cacheDirectory] - compiled-helper directory.
  * @param {typeof ensureSwiftBinary} [options.compile] - compiler entry (injectable).
  * @returns {Promise<SensorSample>} one sample.
@@ -188,6 +244,7 @@ export async function probeSensors({
 } = {}) {
   const binary = await compile({
     sourcePaths,
+    headerPath: samplerHeaderPath(),
     cacheName: 'smc-sampler',
     ...(cacheDirectory === undefined ? {} : { cacheDirectory }),
   })
@@ -247,7 +304,7 @@ export class SmcSampler {
   /**
    * @param {object} [options] - sampler options.
    * @param {number} [options.intervalMs] - sampling cadence, 200…60000.
-   * @param {string[]} [options.sourcePaths] - helper Swift sources.
+   * @param {string[]} [options.sourcePaths] - helper sources (Swift plus the IOReport C shim).
    * @param {string} [options.cacheDirectory] - compiled-helper directory.
    * @param {typeof ensureSwiftBinary} [options.compile] - compiler entry (injectable).
    * @param {typeof spawn} [options.spawnProcess] - child-process factory (injectable).
@@ -321,6 +378,7 @@ export class SmcSampler {
     try {
       this.binary = await this.compile({
         sourcePaths: this.sourcePaths,
+        headerPath: samplerHeaderPath(),
         cacheName: 'smc-sampler',
         ...(this.cacheDirectory === undefined ? {} : { cacheDirectory: this.cacheDirectory }),
       })

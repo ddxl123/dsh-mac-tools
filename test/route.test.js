@@ -184,3 +184,57 @@ test('never serves a phone upload as inline active content', async () => {
   assert.equal(svgResponse.headers.get('content-type'), 'application/octet-stream')
   assert.match(String(svgResponse.headers.get('content-disposition')), /^attachment;/u)
 })
+
+test('serves a Files-tab raster preview through the authenticated file parameter', async () => {
+  const reads = []
+  const payload = pngHeader(64, 48)
+  const { route } = makeRoute({
+    readFile: async (path) => {
+      reads.push(path)
+      return { buffer: payload, mime: 'image/png' }
+    },
+  })
+  const filePath = '/Users/tester/Desktop/photo.png'
+  const response = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?file=${encodeURIComponent(filePath)}`))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'image/png')
+  assert.match(String(response.headers.get('content-disposition')), /^inline/u)
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.match(String(response.headers.get('content-security-policy')), /default-src 'none'/u)
+  const bytes = Buffer.from(await response.arrayBuffer())
+  assert.equal(bytes.byteLength, payload.byteLength)
+  assert.deepEqual(reads, [filePath])
+
+  const empty = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?file=`))
+  assert.equal(empty.status, 400)
+})
+
+test('serves Files-tab Quick Look thumbnails and refuses unreadable files', async () => {
+  const seen = []
+  const { route } = makeRoute({
+    readThumbnail: async (path, size) => {
+      seen.push({ path, size })
+      return { buffer: pngHeader(32, 32), mime: 'image/png' }
+    },
+  })
+  const filePath = '/Users/tester/Documents/scan.pdf'
+  const response = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?thumb=${encodeURIComponent(filePath)}&size=640`))
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'image/png')
+  assert.deepEqual(seen, [{ path: filePath, size: 640 }])
+
+  const noSize = await route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?thumb=${encodeURIComponent(filePath)}`))
+  assert.equal(noSize.status, 200)
+  assert.deepEqual(seen[1], { path: filePath, size: undefined })
+
+  const failing = makeRoute({
+    readFile: async () => { throw new Error('not a raster image') },
+  })
+  const refused = await failing.route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?file=${encodeURIComponent('/tmp/secret.txt')}`))
+  assert.equal(refused.status, 404)
+
+  const unavailable = makeRoute()
+  const unsupported = await unavailable.route.fetch(new Request(`http://127.0.0.1:1234${API_PATH}?file=${encodeURIComponent('/tmp/a.png')}`))
+  assert.equal(unsupported.status, 404)
+})

@@ -34,6 +34,7 @@ import { join } from 'node:path'
 
 import * as captureModule from './capture.js'
 import { Config, resolveConfig } from './config.js'
+import { FileBrowser } from './files.js'
 import { HotkeyController } from './hotkey.js'
 import { HistoryStore } from './history.js'
 import { MonitorService } from './monitor.js'
@@ -146,6 +147,27 @@ export function apply(ctx, rawConfig) {
     warn,
   })
 
+  // The Files tab's local browser. Reads are unrestricted (the user's own
+  // privileges); writes stay inside the home directory and /Volumes. The
+  // construction is contained like the other optional services: a failure
+  // costs the Files tab only, never the whole panel.
+  /** @type {FileBrowser | null} */
+  let files = null
+  if (process.platform === 'darwin') {
+    try {
+      files = new FileBrowser({
+        stateDirectory: join(pluginStateDirectory(ctx), 'files'),
+        favorites: config.filesFavorites,
+        startDirectory: config.filesStartDirectory,
+        showHidden: config.filesShowHidden,
+        warn,
+      })
+    } catch (error) {
+      warn('the Files tab is unavailable because its service could not be created', error)
+      files = null
+    }
+  }
+
   // Phone transfer is a temporary LAN listener the panel starts on demand. It
   // is macOS-only because the receive side uses the native notification,
   // clipboard and file-picker helpers this toolbox already owns.
@@ -223,6 +245,7 @@ export function apply(ctx, rawConfig) {
     ...(pins === null ? {} : { pins }),
     ...(transfer === null ? {} : { transfer }),
     ...(monitor === null ? {} : { monitor }),
+    ...(files === null ? {} : { files }),
   })
 
   // The temporary capture directory belongs to the row: unloading or
@@ -259,6 +282,14 @@ export function apply(ctx, rawConfig) {
     })
   }
 
+  // The Files tab owns no timer or listener, but it keeps a thumbnail cache;
+  // unloading the row drops its in-memory state with it.
+  if (files !== null) {
+    ctx.effect(() => () => {
+      files.dispose()
+    }, 'dsh-mac-tools: files browser')
+  }
+
   // The browser half posts here. `connection.fetch` rather than
   // `connection.rpc.handle`, because a consumer plugin's service resolution
   // cannot reach `webServer` from inside the rpc mount; an exact Fetch route
@@ -271,6 +302,10 @@ export function apply(ctx, rawConfig) {
         readImage: (shotId) => store.read(shotId),
         readHistoryImage: (historyId) => history.read(historyId),
         ...(transfer === null ? {} : { readInboxFile: (inboxId) => transfer.readInboxFile(inboxId) }),
+        ...(files === null ? {} : {
+          readFile: (path) => files.previewFile(path),
+          readThumbnail: (path, size) => files.thumbnail({ path, size }),
+        }),
         warn,
       })),
       'dsh-mac-tools: api route',
@@ -301,6 +336,7 @@ export function apply(ctx, rawConfig) {
     + `, history ${history.indexPath}`
     + (transfer === null ? '' : `, phone transfer inbox ${transferDirectory}`)
     + (visibility.supported ? `, hide-app ${visibility.appName ?? 'unknown'}` : ', hide-app unsupported')
-    + (monitor === null ? '' : ', status monitor active'),
+    + (monitor === null ? '' : ', status monitor active')
+    + (files === null ? '' : ', files browser active'),
   )
 }

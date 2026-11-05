@@ -2,11 +2,16 @@
  * dsh-mac-tools — native SMC sampler.
  *
  * Long-running helper compiled once with `swiftc` (together with
- * `smc-core.swift`) and spawned by `src/smc.js`. It opens the public IOKit
- * `AppleSMC` user client (read access needs no privileges), enumerates the SMC
- * key space once, then prints one JSON line per sample on stdout:
+ * `smc-core.swift` and the `ioreport.c` power shim) and spawned by
+ * `src/smc.js`. It opens the public IOKit `AppleSMC` user client (read access
+ * needs no privileges), enumerates the SMC key space once, then prints one JSON
+ * line per sample on stdout:
  *
- *   {"at":1761220333000,"fanCount":1,"fans":[…],"temperatures":[…]}
+ *   {"at":1761220333000,"fanCount":1,"fans":[…],"temperatures":[…],
+ *    "power":{"cpuW":13.8,"gpuW":3.5,"aneW":0,"dramW":2.5,"socW":19.8}}
+ *
+ * The `power` key is omitted entirely when IOReport is unavailable (Intel
+ * Macs), so the panel can hide the power card without guessing.
  *
  * Usage: smc-sampler --interval-ms 1000 [--once]
  *
@@ -30,6 +35,14 @@ struct FanKeySet {
     let minimum: String
     let maximum: String
     let mode: String
+}
+
+/// Round watts to the one decimal the contract shows. Rounding here (rather
+/// than only in `normalizeSample`) keeps `socW` exactly the sum of the four
+/// blocks the panel displays: rounding each block again in JS could otherwise
+/// disagree with a separately rounded total by 0.1 W.
+func roundWatts(_ value: Double) -> Double {
+    return (value * 10).rounded() / 10
 }
 
 struct Sampler {
@@ -120,6 +133,23 @@ struct Sampler {
         if !fans.isEmpty { payload["fans"] = fans }
         let temperatures = temperaturesValue()
         if !temperatures.isEmpty { payload["temperatures"] = temperatures }
+        // IOReport energy counters: only present when the shim initialized and
+        // a full interval has elapsed since its baseline (see `powerWarmup` in
+        // main). The total is the sum of the four blocks, as the contract says.
+        var power = DshPowerSample()
+        if dsh_power_sample(&power) == 1 {
+            let cpuW = roundWatts(power.cpuW)
+            let gpuW = roundWatts(power.gpuW)
+            let aneW = roundWatts(power.aneW)
+            let dramW = roundWatts(power.dramW)
+            payload["power"] = [
+                "cpuW": cpuW,
+                "gpuW": gpuW,
+                "aneW": aneW,
+                "dramW": dramW,
+                "socW": roundWatts(cpuW + gpuW + aneW + dramW),
+            ]
+        }
         return payload
     }
 }
@@ -149,6 +179,14 @@ struct StateSamplerMain {
             exit(3)
         }
 
+        // IOReport reports cumulative energy: `dsh_power_init` subscribes and
+        // records the baseline, and a reading only exists once a full interval
+        // has passed. So the first line waits one interval — otherwise it (and
+        // every `--once` probe) would omit `power`. Cap the wait at a second so
+        // a slow `--interval-ms` cadence still produces a first line quickly.
+        let powerAvailable = dsh_power_init() == 1
+        let powerWarmup = min(Double(intervalMs) / 1000.0, 1.0)
+
         func emit(_ payload: [String: Any]) {
             guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
                   let text = String(data: data, encoding: .utf8) else {
@@ -159,10 +197,12 @@ struct StateSamplerMain {
         }
 
         if once {
+            if powerAvailable { Thread.sleep(forTimeInterval: powerWarmup) }
             emit(sampler.sample())
             exit(0)
         }
 
+        if powerAvailable { Thread.sleep(forTimeInterval: powerWarmup) }
         while true {
             emit(sampler.sample())
             Thread.sleep(forTimeInterval: Double(intervalMs) / 1000.0)

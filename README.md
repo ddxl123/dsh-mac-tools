@@ -8,13 +8,19 @@ A local macOS toolbox in **one** DeepSeek Harness plugin:
   region/window picker, then crop and annotate in a real editor: arrows,
   rectangles, ellipses, freehand pen, text, mosaic and highlighter, with undo,
   redo, copy to the clipboard and save to disk.
-- **Calculator** — a full calculator panel plus an exact expression engine that
-  the agent can call.
+- **Files** — a Finder-style file browser inside the panel: a Places sidebar,
+  a breadcrumb toolbar, sorting and a preview pane (images inline, text/code up
+  to 256 KB, Quick Look PDF thumbnails). Create folders, rename, drag files in
+  from Finder, compress to zip, move items to the Trash and send a file to your
+  phone — without switching to Finder.
+- **Calculator** — a full calculator panel backed by the Host's exact expression
+  engine (the same engine the endpoint uses, so panel and endpoint agree).
 - **Phone transfer** — scan a QR code with a phone on the same Wi-Fi and send
   text, files and photos to the Mac (or pull screenshots and files back), all
   through the phone's browser. No app install, nothing leaves the local network.
-- **Clipboard** — read and write the macOS text clipboard from the panel or the
-  agent.
+- **Clipboard** — captures, edited images and file paths are written straight to
+  the macOS clipboard (⌘C in the editor, copy-path in the Files tab); the Host
+  also reads the text clipboard for its own shortcut flows.
 - **Status (运行状态)** — a real-time dashboard in the spirit of the App Store
   app **State**: CPU/memory/disk/network/battery charts, system information,
   SMC temperatures and fans, a process ranking and threshold alerts — plus
@@ -54,7 +60,11 @@ the wallpaper (or refuses window captures); the panel then reports the
 `permission` failure code with the path to grant it.
 
 No Accessibility permission is required: region/window selection is macOS's own
-native selection UI, and only the clipboard/pasteboard is touched otherwise.
+native selection UI; the Files tab uses plain file I/O, Quick Look and
+LaunchServices (never Finder automation), and only the clipboard/pasteboard is
+touched otherwise. macOS may still show its standard file-access prompt for
+protected folders such as Desktop or Documents the first time the browser reads
+them; allowing it once is enough.
 
 ## The panel
 
@@ -109,10 +119,56 @@ can be rebound under **Settings → Shortcuts**.
 - Shortcuts inside the editor: `⌘Z` undo, `⇧⌘Z` redo, `Enter` apply crop,
   `Esc` cancel crop then close the screenshot.
 
+### Files tab
+
+A Finder-style browser for the files you actually work with while you are in
+the panel — view, preview and manage them without switching apps.
+
+- **Layout**: a **Places** sidebar on the left (Home, Desktop, Documents,
+  Downloads, Pictures, Movies, Music, Applications, mounted volumes with their
+  free space, and recently visited folders); a toolbar with back / forward /
+  up, a layout switcher, a clickable breadcrumb path, search in the current
+  folder, a sort selector (name / size / modified / kind, ascending or
+  descending), a show-hidden toggle and refresh; the item area in the middle;
+  and a preview pane on the right. Like every tab in this panel, it uses the
+  full window width — the old centered 980 px content column is gone.
+- **Three layouts**: switch between **List** (name / size / modified columns),
+  **Icons** (large colour-coded tiles; raster images show thumbnails) and
+  **Gallery** (a big preview above a filmstrip of the folder). Folders render
+  as a solid amber silhouette; files are outlined and tinted by type (images
+  green, PDFs red, text/code blue, audio/video purple, archives blue, other
+  gray), so a folder never reads as a file at a glance.
+- **Preview**: images are shown inline; text and code files up to 256 KB are
+  shown with a truncation notice; PDFs get a Quick Look first-page thumbnail;
+  other files show a Quick Look preview when one is available, plus metadata —
+  full path, size, kind and modified time.
+- **Select and open**: click to select, ⌘-click or Shift-click for a
+  multi-selection, double-click a folder to enter it, double-click a file to
+  open it with its default application. A selection action row sits above the
+  item area at all times — open, copy path, reveal in Finder, rename, compress
+  to zip, send to phone and move to trash — and its buttons arm once something
+  is selected (rename needs exactly one item). The right-click menu offers the
+  same actions plus new folder and copy name; send to phone reuses the Phone
+  tab's transfer service.
+- **Keyboard**: `↑` / `↓` move the selection, `Enter` opens, `Backspace` or
+  `⌘↑` goes to the parent folder, `Space` toggles the preview, `⌘C` copies the
+  selected path, `⌘⌫` moves the selection to the Trash.
+- **Drag and drop**: drag files from Finder onto the listing and they are
+  copied into the current directory.
+- **Safety**: reading is allowed wherever your account can read, but every
+  mutation is restricted to your home directory and mounted volumes. The
+  browser never permanently deletes: "move to trash" moves the item into your
+  own `~/.Trash`, renaming on a name collision the way Finder does, and a
+  cross-volume trash move is reported as unsupported rather than silently
+  copied. No new permission is needed (no Accessibility, no Finder
+  automation), and no new network listener is started — the tab keeps using
+  the same authenticated `/api/dsh-mac-tools` route. Three config keys seed it:
+  `filesStartDirectory`, `filesShowHidden` and `filesFavorites`.
+
 ### Calculator tab
 
 A display plus keypad with history. Evaluation uses the Host's engine, so the
-same expression gives the same result in the panel and through the tool.
+panel and any direct `calc` endpoint call always agree.
 Supports `+ - * / % ^`, parentheses, unary signs, implicit multiplication
 (`2(3+4)`), percent (`50%`), constants `pi`/`e`/`tau`, and the functions
 `sqrt, cbrt, abs, round, floor, ceil, trunc, sign, exp, ln, log, log2, sin,
@@ -172,6 +228,9 @@ layer); every key has a default.
 | `transferSessionMinutes` | `30` | How long one phone-transfer session stays open before the QR code expires. |
 | `transferMaxFileMB` | `512` | Largest single file a phone may upload, in megabytes. |
 | `transferAutoCopyText` | `false` | Copy text received from the phone to the macOS clipboard automatically. |
+| `filesStartDirectory` | `''` | Directory the Files tab opens first, with `~` expanded. Empty means the home directory. |
+| `filesShowHidden` | `false` | Show hidden entries (dotfiles) in the Files tab listing by default. The panel has a per-view toggle. |
+| `filesFavorites` | `[]` | Extra directories pinned at the top of the Files tab sidebar, with `~` expanded, e.g. `['~/Projects', '~/Downloads']`. |
 | `monitorSampleMs` | `1000` | Host-side sampling cadence for the Status tab, in milliseconds (500–10000). Software metrics are collected at most every 2 s; the panel polls on top of this. |
 | `alertCpuPercent` | `90` | First-run CPU alert threshold in percent. The panel edits it at runtime and the persisted choice wins over this default. |
 | `alertTemperatureCelsius` | `95` | First-run temperature alert threshold in °C, taken from the SMC sensor groups. |
@@ -209,10 +268,15 @@ layer); every key has a default.
   listener (`src/transfer.js`) is a separate, on-demand `node:http` server bound
   to the LAN only while a session is active; it serves the phone page and the
   upload/download API, and keeps its inbox/outbox index in the plugin state
-  directory. No agent tools are registered.
+  directory. The Files tab's Host side (`src/files.js`) uses Node's built-in
+  file APIs only — no new dependency — with macOS features (Quick Look
+  thumbnails, mounted-volume discovery, LaunchServices open/reveal, system zip
+  and the user's Trash) behind the plugin's platform gate; its only state is a
+  recent-folder list and a thumbnail cache in the plugin state directory. No
+  agent tools are registered.
 - **Client half** (`client/index.js`): one plain-React bundle loaded by
   `window.__ModuleLoader__`. It registers the rail entry and the `main` panel,
-  renders the four tabs, and talks to the Host only through the route above.
+  renders the five tabs, and talks to the Host only through the route above.
 - The capture engine is a thin wrapper over the system utility a person already
   granted Screen Recording to; region/window selection, cancellation and window
   picking are native macOS behavior, not reimplemented.
@@ -222,6 +286,8 @@ POST /api/dsh-mac-tools   { "endpoint": "...", "payload": { ... } }
 GET  /api/dsh-mac-tools?shot=<id>    → image/png (temporary capture)
 GET  /api/dsh-mac-tools?history=<id> → image/png (durable history capture)
 GET  /api/dsh-mac-tools?inbox=<id>   → bytes of a file the phone sent
+GET  /api/dsh-mac-tools?file=<absolute path>                  → inline raster image
+GET  /api/dsh-mac-tools?thumb=<absolute path>&size=<64..1024> → Quick Look PNG thumbnail
 ```
 
 The `?inbox=` preview keeps only inert raster images (`png`, `jpeg`, `gif`,
@@ -229,12 +295,20 @@ The `?inbox=` preview keeps only inert raster images (`png`, `jpeg`, `gif`,
 `application/octet-stream` attachment, so a phone-supplied HTML or SVG file can
 never execute in the Web UI's origin.
 
+The Files tab follows the same rule: `?file=` serves only those raster types
+inline (`nosniff`, `no-store`) and refuses everything else, while `?thumb=`
+renders a Quick Look PNG for non-raster files such as PDFs and Office
+documents, cached under the plugin state directory.
+
 Endpoints: `status`, `windows`, `capture`, `cancelCapture`, `copy`, `save`,
 `calc`, `clipboard`, `system`, `reveal`, the phone-transfer group
 `transferStatus`, `transferStart`, `transferStop`, `transferInbox`,
 `transferOutbox`, the status-monitor group `monitor`, `monitorProcesses`,
-`monitorKill`, `monitorAlertSave`, `monitorAlertTest`, and the fan group
-`fanInstall`, `fanUninstall`, `fanApply`, `fanPreset`. Answers are
+`monitorKill`, `monitorAlertSave`, `monitorAlertTest`, the fan group
+`fanInstall`, `fanUninstall`, `fanApply`, `fanPreset`, and the Files group
+`filesPlaces`, `filesList`, `filesRead`, `filesMkdir`, `filesRename`,
+`filesTrash`, `filesCompress`, `filesReveal`, `filesOpen`, `filesSend`,
+`filesDrop`. Answers are
 `{ ok: true, value }` or `{ ok: false, error: { code, message, details } }`.
 
 The phone talks to its own temporary server under

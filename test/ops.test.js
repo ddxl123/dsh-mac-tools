@@ -6,11 +6,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { CaptureError } from '../src/capture.js'
+import { FileBrowser, FilesError } from '../src/files.js'
 import { HotkeyValidationError } from '../src/hotkey.js'
 import { createOps, decodePngBase64, expandHome, isInsideDirectory, sanitizeFileName, timestampName } from '../src/ops.js'
 import { ShotStore } from '../src/store.js'
@@ -218,6 +219,132 @@ test('refuses unknown endpoints and malformed payloads', async () => {
     await assert.rejects(ops.dispatch('nope', {}), (error) => error.code === 'unknown_endpoint')
     await assert.rejects(ops.dispatch('copy', {}), (error) => error.code === 'invalid_request')
     await assert.rejects(ops.dispatch('save', { pngBase64: 'not base64 !' }), (error) => error.code === 'invalid_request')
+  } finally {
+    cleanup()
+  }
+})
+
+test('monitorEnergy validates the date range and delegates to the ledger', async () => {
+  const calls = []
+  const monitor = {
+    async energy(range) {
+      calls.push(range)
+      return {
+        from: range.from ?? '2026-10-30',
+        to: range.to ?? '2026-11-05',
+        days: [],
+        totalWh: 2,
+        averageWh: 0.2857,
+        pricePerKwh: 0.56,
+        totalCost: 0.0011,
+        averageCost: 0.0002,
+      }
+    },
+  }
+  const { ops, cleanup } = makeHarness({ monitor })
+  try {
+    const range = await ops.dispatch('monitorEnergy', { from: '2026-10-30', to: '2026-11-05' })
+    assert.deepEqual(range, {
+      from: '2026-10-30',
+      to: '2026-11-05',
+      days: [],
+      totalWh: 2,
+      averageWh: 0.2857,
+      pricePerKwh: 0.56,
+      totalCost: 0.0011,
+      averageCost: 0.0002,
+    })
+    assert.deepEqual(calls[0], { from: '2026-10-30', to: '2026-11-05' })
+
+    await assert.rejects(ops.dispatch('monitorEnergy', { from: '2026-02-30' }), (error) => {
+      assert.equal(error.code, 'invalid_request')
+      assert.equal(error.details.field, 'from')
+      return true
+    })
+    await assert.rejects(ops.dispatch('monitorEnergy', { to: '2026-13-01' }), (error) => {
+      assert.equal(error.code, 'invalid_request')
+      assert.equal(error.details.field, 'to')
+      return true
+    })
+    await assert.rejects(ops.dispatch('monitorEnergy', { from: '2026-11-05', to: '2026-11-01' }), (error) => {
+      assert.equal(error.code, 'invalid_request')
+      assert.equal(error.details.field, 'from')
+      return true
+    })
+    await assert.rejects(
+      ops.dispatch('monitorEnergy', { from: '2999-01-01' }),
+      (error) => error.code === 'invalid_request',
+      'a lone future from defaults to today and is rejected',
+    )
+    await assert.rejects(ops.dispatch('monitorEnergy', { from: '2024-01-01', to: '2025-01-01' }), (error) => {
+      assert.equal(error.code, 'invalid_request')
+      assert.match(error.message, /366/u)
+      return true
+    })
+    assert.equal(calls.length, 1, 'a rejected range never reaches the monitor')
+
+    // 2024 is a leap year: its 366 inclusive days are the documented maximum.
+    await ops.dispatch('monitorEnergy', { from: '2024-01-01', to: '2024-12-31' })
+    assert.deepEqual(calls[1], { from: '2024-01-01', to: '2024-12-31' })
+
+    // Absent fields reach the service untouched, so the ledger applies its defaults.
+    await ops.dispatch('monitorEnergy')
+    assert.deepEqual(calls[2], { from: undefined, to: undefined })
+  } finally {
+    cleanup()
+  }
+})
+
+test('energyPriceSave validates the price and delegates to the monitor', async () => {
+  const calls = []
+  const monitor = {
+    saveEnergyPrice(pricePerKwh) {
+      calls.push(pricePerKwh)
+      return {
+        todayWh: 1000, totalWh: 1000, days: 1, since: '2026-11-05',
+        pricePerKwh, costToday: pricePerKwh, costTotal: pricePerKwh,
+      }
+    },
+  }
+  const { ops, cleanup } = makeHarness({ monitor })
+  try {
+    const saved = await ops.dispatch('energyPriceSave', { pricePerKwh: 0.56 })
+    assert.equal(saved.pricePerKwh, 0.56)
+    assert.equal(saved.costTotal, 0.56)
+    assert.deepEqual(calls, [0.56])
+
+    // The contract's inclusive bounds are accepted.
+    await ops.dispatch('energyPriceSave', { pricePerKwh: 0 })
+    await ops.dispatch('energyPriceSave', { pricePerKwh: 100 })
+    assert.deepEqual(calls, [0.56, 0, 100])
+
+    const refused = [
+      {},
+      { pricePerKwh: '0.56' },
+      { pricePerKwh: -0.01 },
+      { pricePerKwh: 100.01 },
+      { pricePerKwh: Number.NaN },
+      { pricePerKwh: Number.POSITIVE_INFINITY },
+      { pricePerKwh: null },
+    ]
+    for (const payload of refused) {
+      await assert.rejects(ops.dispatch('energyPriceSave', payload), (error) => {
+        assert.equal(error.code, 'invalid_request')
+        assert.equal(error.details.field, 'pricePerKwh')
+        return true
+      })
+    }
+    assert.equal(calls.length, 3, 'a rejected price never reaches the monitor')
+  } finally {
+    cleanup()
+  }
+})
+
+test('monitorEnergy and energyPriceSave are unsupported without a monitor service', async () => {
+  const { ops, cleanup } = makeHarness()
+  try {
+    await assert.rejects(ops.dispatch('monitorEnergy', {}), (error) => error.code === 'unsupported')
+    await assert.rejects(ops.dispatch('energyPriceSave', { pricePerKwh: 0.5 }), (error) => error.code === 'unsupported')
   } finally {
     cleanup()
   }
@@ -897,5 +1024,264 @@ test('phone transfer is unsupported without the service', async () => {
     await assert.rejects(ops.dispatch('transferInbox', { action: 'refresh' }), (error) => error.code === 'unsupported')
   } finally {
     cleanup()
+  }
+})
+
+/** A file-browser stub recording every call, for the Files-tab dispatcher tests. */
+function createFilesStub() {
+  const calls = []
+  const push = (name, request) => {
+    calls.push({ name, request })
+    return request
+  }
+  return {
+    calls,
+    async places() {
+      calls.push({ name: 'places' })
+      return {
+        startDirectory: '/Users/tester',
+        favorites: [{ id: 'home', name: 'Home', path: '/Users/tester' }],
+        volumes: [],
+        recents: [],
+      }
+    },
+    async list(request) {
+      push('list', request)
+      return { path: request.path, name: 'tester', parent: '/Users', writable: true, system: false, freeBytes: 1, totalBytes: 2, entries: [], total: 0, truncated: false }
+    },
+    async readText(request) {
+      push('readText', request)
+      return { path: request.path, name: 'a.txt', text: 'hi', bytes: 2, truncated: false, lines: 1 }
+    },
+    async createFolder(request) {
+      push('createFolder', request)
+      return { path: `${request.path}/${request.name}`, name: request.name }
+    },
+    async rename(request) {
+      push('rename', request)
+      return { path: request.path, name: request.name }
+    },
+    async trash(request) {
+      push('trash', request)
+      return { trashed: request.paths.map((path) => ({ path, trashPath: `/Users/tester/.Trash/${path}` })), failed: [] }
+    },
+    async compress(request) {
+      push('compress', request)
+      return { path: '/Users/tester/archive.zip', bytes: 64 }
+    },
+    async reveal(request) {
+      push('reveal', request)
+      return { revealed: true, path: request.path }
+    },
+    async open(request) {
+      push('open', request)
+      return { opened: true, path: request.path }
+    },
+    async drop(request) {
+      push('drop', request)
+      return { saved: request.files.map((file) => ({ name: file.name, path: `${request.directory}/${file.name}`, bytes: 3 })), failed: [] }
+    },
+    async previewFile(path) {
+      push('previewFile', path)
+      return { buffer: Buffer.from([1, 2, 3]), mime: 'image/png' }
+    },
+    async thumbnail(request) {
+      push('thumbnail', request)
+      return { buffer: Buffer.from([1, 2, 3]), mime: 'image/png' }
+    },
+    dispose() {},
+  }
+}
+
+test('the files endpoints forward to the file browser with documented payloads', async () => {
+  const files = createFilesStub()
+  const { ops, cleanup } = makeHarness({ files })
+  try {
+    const status = await ops.dispatch('status', {})
+    assert.equal(status.capabilities.files, true)
+
+    const places = await ops.dispatch('filesPlaces', {})
+    assert.equal(places.startDirectory, '/Users/tester')
+
+    await ops.dispatch('filesList', { path: '/Users/tester', sort: 'size', order: 'desc', showHidden: true })
+    assert.deepEqual(files.calls.find((call) => call.name === 'list').request, {
+      path: '/Users/tester',
+      sort: 'size',
+      order: 'desc',
+      showHidden: true,
+    })
+
+    await ops.dispatch('filesRead', { path: '/Users/tester/a.txt' })
+    assert.deepEqual(files.calls.find((call) => call.name === 'readText').request, {
+      path: '/Users/tester/a.txt',
+      maxBytes: undefined,
+    })
+
+    await ops.dispatch('filesMkdir', { path: '/Users/tester', name: 'photos' })
+    assert.deepEqual(files.calls.find((call) => call.name === 'createFolder').request, { path: '/Users/tester', name: 'photos' })
+
+    await ops.dispatch('filesRename', { path: '/Users/tester/a.txt', name: 'b.txt' })
+    assert.deepEqual(files.calls.find((call) => call.name === 'rename').request, { path: '/Users/tester/a.txt', name: 'b.txt' })
+
+    await ops.dispatch('filesTrash', { paths: ['/Users/tester/a.txt'] })
+    assert.deepEqual(files.calls.find((call) => call.name === 'trash').request, { paths: ['/Users/tester/a.txt'] })
+
+    await ops.dispatch('filesCompress', { paths: ['/Users/tester/a.txt'] })
+    assert.deepEqual(files.calls.find((call) => call.name === 'compress').request, { paths: ['/Users/tester/a.txt'] })
+
+    await ops.dispatch('filesReveal', { path: '/Users/tester/a.txt' })
+    assert.deepEqual(files.calls.find((call) => call.name === 'reveal').request, { path: '/Users/tester/a.txt' })
+
+    await ops.dispatch('filesOpen', { path: '/Users/tester/a.txt' })
+    assert.deepEqual(files.calls.find((call) => call.name === 'open').request, { path: '/Users/tester/a.txt' })
+
+    await ops.dispatch('filesDrop', {
+      directory: '/Users/tester',
+      files: [{ name: 'dropped.txt', dataBase64: 'QUJD' }],
+    })
+    assert.deepEqual(files.calls.find((call) => call.name === 'drop').request, {
+      directory: '/Users/tester',
+      files: [{ name: 'dropped.txt', dataBase64: 'QUJD' }],
+    })
+  } finally {
+    cleanup()
+  }
+})
+
+test('filesSend queues the selected paths through the phone-transfer service', async () => {
+  const files = createFilesStub()
+  const sent = []
+  const transfer = {
+    async addFile(path) {
+      sent.push(path)
+      return { item: { id: `o${sent.length}`, path } }
+    },
+  }
+  const { ops, cleanup } = makeHarness({ files, transfer })
+  try {
+    const result = await ops.dispatch('filesSend', { paths: ['/Users/tester/a.txt', '/Users/tester/b.txt'] })
+    assert.equal(result.count, 2)
+    assert.equal(result.items.length, 2)
+    assert.deepEqual(sent, ['/Users/tester/a.txt', '/Users/tester/b.txt'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('files operations validate their payloads and translate failure codes', async () => {
+  const files = createFilesStub()
+  const { ops, cleanup } = makeHarness({ files })
+  try {
+    await assert.rejects(
+      () => ops.dispatch('filesTrash', { paths: [] }),
+      (error) => error instanceof Error && error.code === 'invalid_request',
+    )
+    await assert.rejects(
+      () => ops.dispatch('filesList', {}),
+      (error) => error instanceof Error && error.code === 'invalid_request',
+    )
+    await assert.rejects(
+      () => ops.dispatch('filesDrop', { directory: '/Users/tester', files: [{ name: '', dataBase64: '' }] }),
+      (error) => error instanceof Error && error.code === 'invalid_request',
+    )
+
+    const failing = makeHarness({
+      files: {
+        ...createFilesStub(),
+        async list() {
+          throw new FilesError('files_not_found', 'the folder does not exist', { path: '/nope' })
+        },
+        async places() {
+          throw new FilesError('files_something_unknown', 'weird', {})
+        },
+      },
+    })
+    try {
+      await assert.rejects(
+        () => failing.ops.dispatch('filesList', { path: '/nope' }),
+        (error) => error instanceof Error && error.code === 'files_not_found' && error.details.path === '/nope',
+      )
+      await assert.rejects(
+        () => failing.ops.dispatch('filesPlaces', {}),
+        (error) => error instanceof Error && error.code === 'files_failed',
+      )
+    } finally {
+      failing.cleanup()
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('files endpoints report unsupported when no file browser is mounted', async () => {
+  const { ops, cleanup } = makeHarness()
+  try {
+    await assert.rejects(
+      () => ops.dispatch('filesPlaces', {}),
+      (error) => error instanceof Error && error.code === 'unsupported',
+    )
+    const status = await ops.dispatch('status', {})
+    assert.equal(status.capabilities.files, false)
+  } finally {
+    cleanup()
+  }
+})
+
+test('the Files endpoints work end to end against a real FileBrowser sandbox', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-mac-tools-files-e2e-'))
+  const browser = new FileBrowser({
+    stateDirectory: join(root, 'state'),
+    readRoots: [root],
+    writeRoots: [root],
+    trashDirectory: join(root, 'trash'),
+    warn: () => {},
+  })
+  const { ops, cleanup } = makeHarness({ files: browser, config: { filesShowHidden: true } })
+  try {
+    const filesRoot = join(root, 'files')
+    mkdirSync(filesRoot, { recursive: true })
+    writeFileSync(join(filesRoot, 'note.txt'), 'hello')
+    writeFileSync(join(filesRoot, 'shot.png'), pngHeader())
+
+    const places = await ops.dispatch('filesPlaces', {})
+    assert.equal(places.showHidden, true, 'the configured hidden-file default reaches the panel')
+    assert.ok(places.startDirectory.length > 0)
+
+    const listing = await ops.dispatch('filesList', { path: filesRoot })
+    assert.equal(listing.entries.length, 2)
+    assert.equal(listing.entries.some((entry) => entry.name === 'note.txt'), true)
+
+    const read = await ops.dispatch('filesRead', { path: join(filesRoot, 'note.txt') })
+    assert.equal(read.text, 'hello')
+    assert.equal(read.truncated, false)
+
+    const preview = await browser.previewFile(join(filesRoot, 'shot.png'))
+    assert.equal(preview.mime, 'image/png')
+    assert.ok(Buffer.isBuffer(preview.buffer))
+
+    await ops.dispatch('filesMkdir', { path: filesRoot, name: 'sub' })
+    assert.equal(existsSync(join(filesRoot, 'sub')), true)
+
+    await ops.dispatch('filesRename', { path: join(filesRoot, 'note.txt'), name: 'renamed.txt' })
+    assert.equal(existsSync(join(filesRoot, 'renamed.txt')), true)
+
+    const archive = await ops.dispatch('filesCompress', { paths: [join(filesRoot, 'renamed.txt')] })
+    assert.equal(existsSync(archive.path), true)
+    assert.ok(archive.bytes > 0)
+
+    const trashed = await ops.dispatch('filesTrash', { paths: [join(filesRoot, 'shot.png')] })
+    assert.equal(trashed.trashed.length, 1)
+    assert.equal(existsSync(join(filesRoot, 'shot.png')), false)
+
+    const drop = await ops.dispatch('filesDrop', {
+      directory: filesRoot,
+      files: [{ name: 'dropped.txt', dataBase64: Buffer.from('abc').toString('base64') }],
+    })
+    assert.equal(drop.saved.length, 1)
+    assert.equal(readFileSync(join(filesRoot, 'dropped.txt'), 'utf8'), 'abc')
+  } finally {
+    browser.dispose()
+    cleanup()
+    rmSync(root, { recursive: true, force: true })
   }
 })

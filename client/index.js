@@ -64,7 +64,8 @@ window.__ModuleLoader__.load({
     const API_PATH = '/api/dsh-mac-tools'
 
     /** The tab order used by the tablist and its arrow-key navigation. */
-    const TABS = ['screenshot', 'calculator', 'monitor', 'transfer']
+    // 运行状态 leads the bar and is the panel's default landing page.
+    const TABS = ['monitor', 'screenshot', 'files', 'calculator', 'transfer']
     /** How many successful evaluations the calculator remembers. */
     const CALC_HISTORY_LIMIT = 10
     /** How often the transfer tab polls the session state while visible. */
@@ -77,6 +78,19 @@ window.__ModuleLoader__.load({
     const TRANSFER_TOAST_MS = 3000
     /** How many recent screenshots the outbox offers as one-tap sends. */
     const TRANSFER_RECENT_SCREENSHOTS = 6
+    /** Sort keys the Files tab can order one directory by. */
+    const FILES_SORTS = ['name', 'size', 'mtime', 'kind']
+    /** Layout modes the Files tab can switch between. */
+    const FILES_VIEWS = ['list', 'icons', 'gallery']
+    /** Extensions the Files tab previews as text through the Host. */
+    const FILES_TEXT_EXTENSIONS = [
+      'txt', 'md', 'markdown', 'json', 'jsonc', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'css', 'scss',
+      'html', 'htm', 'xml', 'svg', 'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'sh', 'zsh', 'bash',
+      'py', 'rb', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cc', 'cpp', 'hpp', 'swift', 'm', 'mm', 'php',
+      'lua', 'sql', 'graphql', 'gql', 'log', 'env', 'plist', 'csv', 'tsv', 'srt', 'vtt', 'diff', 'patch',
+    ]
+    /** Extensions the Host can serve inline as a raster image preview. */
+    const FILES_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp']
     /** The data-URL prefix a base64 QR PNG is rendered through. */
     const TRANSFER_QR_PREFIX = 'data:image/png;base64,'
     /** How often the visible status tab polls the Host snapshot. */
@@ -85,8 +99,47 @@ window.__ModuleLoader__.load({
     const MONITOR_INTERVALS = [1000, 2000, 5000]
     /** How often the expanded process ranking refreshes. */
     const MONITOR_PROCESS_POLL_MS = 3000
+    /** How often the energy statistics refresh (the ledger moves slowly). */
+    const MONITOR_ENERGY_POLL_MS = 30000
+    /** The date ranges the energy section offers, in display order. */
+    const MONITOR_ENERGY_RANGES = ['today', '7d', '30d', 'custom']
+    /** Energy range id -> locale key. */
+    const MONITOR_ENERGY_RANGE_KEYS = {
+      today: 'monitor.energy.range.today',
+      '7d': 'monitor.energy.range.7d',
+      '30d': 'monitor.energy.range.30d',
+      custom: 'monitor.energy.range.custom',
+    }
+    /** The bar-chart grouping modes, in display order. */
+    const MONITOR_ENERGY_GROUPS = ['auto', 'day', 'week', 'month']
+    /** Energy grouping id -> locale key. */
+    const MONITOR_ENERGY_GROUP_KEYS = {
+      auto: 'monitor.energy.group.auto',
+      day: 'monitor.energy.group.day',
+      week: 'monitor.energy.group.week',
+      month: 'monitor.energy.group.month',
+    }
+    /** The default electricity price (元/度) the panel shows before the Host answers. */
+    const MONITOR_ENERGY_DEFAULT_PRICE = 0.5
+    /**
+     * The status page's sub-pages, in the left rail's order. The page used to be
+     * one long scroll; each entry now owns the sections that belong together.
+     */
+    const MONITOR_SUBS = [
+      { id: 'overview', labelKey: 'monitor.subnav.overview' },
+      { id: 'sensors', labelKey: 'monitor.subnav.sensors' },
+      { id: 'energy', labelKey: 'monitor.subnav.energy' },
+      { id: 'fan', labelKey: 'monitor.subnav.fan' },
+      { id: 'processes', labelKey: 'monitor.subnav.processes' },
+      { id: 'alerts', labelKey: 'monitor.subnav.alerts' },
+      { id: 'system', labelKey: 'monitor.subnav.system' },
+    ]
     /** How many process rows the ranking shows (the Host may return more). */
     const MONITOR_PROCESS_LIMIT = 12
+    /** The process ranking's sortable keys, in column order. */
+    const MONITOR_PROCESS_SORTS = ['name', 'pid', 'cpu', 'memory', 'rss']
+    /** Sort keys whose natural direction is descending (busiest / largest first). */
+    const MONITOR_PROCESS_DESCENDING_SORTS = ['cpu', 'memory', 'rss']
     /** Delay between releasing the fan slider and writing the new target. */
     const MONITOR_FAN_DEBOUNCE_MS = 250
     /** How long the inline kill confirmation stays armed. */
@@ -126,6 +179,13 @@ window.__ModuleLoader__.load({
       memoryCompressed: 'var(--dsw-alias-state-warn-primary)',
       memoryCached: 'var(--dsw-alias-state-success-primary)',
       memoryFree: 'var(--dsw-alias-bg-layer-3)',
+      power: '#ff9f0a',
+      powerCpu: 'var(--dsw-alias-state-business-primary)',
+      powerGpu: '#ff9f0a',
+      powerDram: 'var(--dsw-alias-state-success-primary)',
+      powerAne: 'var(--dsw-alias-state-warn-primary)',
+      powerTemperature: 'var(--dsw-alias-state-business-primary)',
+      powerFan: 'var(--dsw-alias-state-warn-primary)',
     }
     /** Non-null temperature groups, in display order. */
     const MONITOR_SENSOR_GROUPS = [
@@ -174,6 +234,7 @@ window.__ModuleLoader__.load({
       ['pin', 'monitor.system.capability.pin'],
       ['history', 'monitor.system.capability.history'],
       ['transfer', 'monitor.system.capability.transfer'],
+      ['files', 'monitor.system.capability.files'],
       ['monitor', 'monitor.system.capability.monitor'],
       ['fanControl', 'monitor.system.capability.fanControl'],
     ]
@@ -183,11 +244,15 @@ window.__ModuleLoader__.load({
       temperature: 'monitor.alerts.metric.temperature',
       memory: 'monitor.alerts.metric.memory',
     }
-    /** Fan mode -> locale key. */
+    /**
+     * Host fan mode -> locale key. The Host's `auto` is the SMC's own automatic
+     * control (reachable through 恢复系统自动); the panel's 自动 button drives the
+     * temperature curve, which the Host calls `curve`.
+     */
     const MONITOR_FAN_MODE_KEYS = {
-      auto: 'monitor.fan.mode.auto',
+      auto: 'monitor.fan.mode.system',
       manual: 'monitor.fan.mode.manual',
-      curve: 'monitor.fan.mode.curve',
+      curve: 'monitor.fan.mode.auto',
     }
     /** Per-fan SMC mode -> locale key. */
     const MONITOR_FAN_ITEM_MODE_KEYS = {
@@ -201,7 +266,7 @@ window.__ModuleLoader__.load({
     const zh = {
       'panel': 'Mac 工具箱',
       'title': 'Mac 工具箱',
-      'subtitle': '截图与标注、计算器、运行状态监控、手机互传 —— 全部在本机完成。',
+      'subtitle': '截图与标注、文件浏览、计算器、运行状态监控、手机互传 —— 全部在本机完成。',
       'hostAria': 'Host 连接状态',
       'host.loading': '正在连接本地 Host…',
       'host.ready': 'Host 已连接 · v{version}',
@@ -480,6 +545,14 @@ window.__ModuleLoader__.load({
       'monitor.badge.sensors': '温度传感器',
       'monitor.badge.fans': '风扇控制',
       'monitor.badge.battery': '电池',
+      'monitor.subnav.aria': '运行状态子页面',
+      'monitor.subnav.overview': '概览',
+      'monitor.subnav.sensors': '传感器',
+      'monitor.subnav.energy': '能耗',
+      'monitor.subnav.fan': '风扇',
+      'monitor.subnav.processes': '进程',
+      'monitor.subnav.alerts': '告警',
+      'monitor.subnav.system': '系统',
       'monitor.available': '可用',
       'monitor.unavailable': '不可用',
       'monitor.unknown': '未知',
@@ -529,6 +602,50 @@ window.__ModuleLoader__.load({
       'monitor.battery.remainingUnknown': '剩余时间未知',
       'monitor.battery.health': '健康度 {percent}%',
       'monitor.battery.cycles': '循环 {count} 次',
+      'monitor.power.title': '功耗',
+      'monitor.power.meta': 'SoC',
+      'monitor.power.unit': '功耗',
+      'monitor.power.cpu': 'CPU',
+      'monitor.power.gpu': 'GPU',
+      'monitor.power.dram': '内存',
+      'monitor.power.ane': '神经网络',
+      'monitor.power.energy': '本次运行累计 {value}',
+      'monitor.power.unavailable': '功耗读数不可用（需要 Apple Silicon 与 IOReport）。',
+      'monitor.power.section.title': '功耗与散热',
+      'monitor.power.section.meta': '功耗 → 温度 / 风扇',
+      'monitor.power.resistance': '热阻',
+      'monitor.power.resistanceValue': '{value} °C/W',
+      'monitor.power.efficiency': '风扇效率',
+      'monitor.power.efficiencyValue': '{value} RPM/W',
+      'monitor.power.scatter.temperature': '功耗 → CPU 温度',
+      'monitor.power.scatter.fan': '功耗 → 风扇转速',
+      'monitor.power.scatter.range': '{xMin}–{xMax} {xUnit} → {yMin}–{yMax} {yUnit}',
+      'monitor.power.scatter.empty': '样本还不够，稍后再看。',
+      'monitor.power.scatter.timeRange': '样本时间 {range}',
+      'monitor.energy.title': '能耗统计',
+      'monitor.energy.unit': '度',
+      'monitor.energy.range.today': '今天',
+      'monitor.energy.range.7d': '近 7 天',
+      'monitor.energy.range.30d': '近 30 天',
+      'monitor.energy.range.custom': '自定义',
+      'monitor.energy.from': '开始日期',
+      'monitor.energy.to': '结束日期',
+      'monitor.energy.apply': '应用',
+      'monitor.energy.totals': '今日 {today} 度 · 累计 {total} 度',
+      'monitor.energy.cost': '本区间电费 ≈ ¥{cost}（{price} 元/度）',
+      'monitor.energy.priceLabel': '电价',
+      'monitor.energy.priceUnit': '元/度',
+      'monitor.energy.priceSave': '保存',
+      'monitor.energy.priceSaving': '保存中…',
+      'monitor.energy.invalidPrice': '电价必须是 0~100 之间的数字（元/度）。',
+      'monitor.energy.group.auto': '自动',
+      'monitor.energy.group.day': '按天',
+      'monitor.energy.group.week': '按周',
+      'monitor.energy.group.month': '按月',
+      'monitor.energy.loading': '正在读取能耗记录…',
+      'monitor.energy.empty': '这个时间段还没有能耗记录（插件运行期间才会累计）。',
+      'monitor.energy.invalidRange': '请选择完整的开始和结束日期，且开始日期不能晚于结束日期。',
+      'monitor.energy.chartAria': '每日能耗柱状图',
       'monitor.footer.uptime': '已运行 {duration}',
       'monitor.footer.host': '{model} · {hostname}',
       'monitor.footer.os': '{os} {version}',
@@ -592,9 +709,12 @@ window.__ModuleLoader__.load({
       'monitor.fan.mode': '模式',
       'monitor.fan.mode.auto': '自动',
       'monitor.fan.mode.manual': '手动',
-      'monitor.fan.mode.curve': '温度曲线',
+      'monitor.fan.mode.system': '系统自动',
       'monitor.fan.manual': '手动转速',
       'monitor.fan.manualHint': '松开滑块后写入（约 250 ms 防抖）。',
+      'monitor.fan.quick.rpm': 'RPM',
+      'monitor.fan.quick.full': '全速',
+      'monitor.fan.quick.open': '去风扇页设置',
       'monitor.fan.manualValue': '{rpm} RPM',
       'monitor.fan.holding': '控制保持中 · 目标 {rpm} RPM',
       'monitor.fan.autoHolding': '系统自动控制',
@@ -608,7 +728,7 @@ window.__ModuleLoader__.load({
       'monitor.fan.curve.points': '{count} 个节点',
       'monitor.fan.curve.point': '{celsius} °C → {rpm} RPM',
       'monitor.fan.presets': '预设',
-      'monitor.fan.preset.auto': '自动',
+      'monitor.fan.preset.auto': '系统自动',
       'monitor.fan.preset.quiet': '安静',
       'monitor.fan.preset.balanced': '均衡',
       'monitor.fan.preset.performance': '性能',
@@ -628,14 +748,12 @@ window.__ModuleLoader__.load({
       'monitor.processes.title': '进程排行',
       'monitor.processes.expand': '展开进程排行',
       'monitor.processes.collapse': '收起进程排行',
-      'monitor.processes.hint': '按 {sort} 排序 · 每 3 秒刷新',
-      'monitor.processes.sortAria': '进程排序方式',
-      'monitor.processes.sort.cpu': 'CPU',
-      'monitor.processes.sort.memory': '内存',
+      'monitor.processes.hint': '点击表头排序，再次点击切换升降序 · 每 3 秒刷新',
+      'monitor.processes.sortHint': '点击按此列排序',
       'monitor.processes.loading': '正在读取进程列表…',
       'monitor.processes.empty': '没有可显示的进程',
       'monitor.processes.error': '无法读取进程列表：{message}',
-      'monitor.processes.pid': 'PID {pid}',
+      'monitor.processes.pid': 'PID',
       'monitor.processes.name': '进程',
       'monitor.processes.cpu': 'CPU',
       'monitor.processes.memory': '内存',
@@ -693,15 +811,119 @@ window.__ModuleLoader__.load({
       'monitor.system.capability.pin': '贴图窗口',
       'monitor.system.capability.history': '截图历史',
       'monitor.system.capability.transfer': '手机互传',
+      'monitor.system.capability.files': '文件浏览器',
       'monitor.system.capability.monitor': '运行状态监控',
       'monitor.system.capability.fanControl': '风扇控制',
       'monitor.system.note': '内存、磁盘、电池、CPU 与网络数据可在上方概览卡片中查看。',
+      'tab.files': '文件',
+      'files.aria': '文件浏览器',
+      'files.places': '常用位置',
+      'files.volumes': '磁盘',
+      'files.recent': '最近使用',
+      'files.recentEmpty': '还没有访问过文件夹',
+      'files.place.home': '个人目录',
+      'files.place.desktop': '桌面',
+      'files.place.documents': '文稿',
+      'files.place.downloads': '下载',
+      'files.place.pictures': '图片',
+      'files.place.movies': '影片',
+      'files.place.music': '音乐',
+      'files.place.applications': '应用程序',
+      'files.place.custom': '收藏',
+      'files.free': '可用 {size}',
+      'files.toolbar.back': '后退',
+      'files.toolbar.forward': '前进',
+      'files.toolbar.up': '上一级',
+      'files.toolbar.refresh': '刷新',
+      'files.toolbar.newFolder': '新建文件夹',
+      'files.toolbar.search': '搜索当前文件夹',
+      'files.toolbar.sort': '排序',
+      'files.sort.name': '名称',
+      'files.sort.size': '大小',
+      'files.sort.mtime': '修改时间',
+      'files.sort.kind': '类型',
+      'files.order.asc': '升序',
+      'files.order.desc': '降序',
+      'files.view.aria': '显示方式',
+      'files.view.list': '列表',
+      'files.view.icons': '图标',
+      'files.view.gallery': '画廊',
+      'files.showHidden': '显示隐藏文件',
+      'files.hideHidden': '隐藏隐藏文件',
+      'files.loading': '正在读取文件夹…',
+      'files.empty': '这个文件夹是空的',
+      'files.emptyHint': '把文件从访达拖进来，或新建一个文件夹。',
+      'files.searchEmpty': '没有匹配的项目',
+      'files.truncated': '项目过多，仅显示前 {count} 项',
+      'files.notWritable': '此位置不可修改',
+      'files.system': '系统文件夹',
+      'files.status.items': '{count} 项',
+      'files.status.selected': '已选 {count} 项',
+      'files.status.none': '未选择项目',
+      'files.selection.aria': '所选项目的操作',
+      'files.status.free': '可用 {size}',
+      'files.column.name': '名称',
+      'files.column.size': '大小',
+      'files.column.mtime': '修改时间',
+      'files.kind.directory': '文件夹',
+      'files.kind.image': '图片',
+      'files.kind.text': '文本',
+      'files.kind.code': '代码',
+      'files.kind.pdf': 'PDF',
+      'files.kind.archive': '压缩包',
+      'files.kind.audio': '音频',
+      'files.kind.video': '视频',
+      'files.kind.symlink': '符号链接',
+      'files.kind.other': '文件',
+      'files.preview.title': '预览',
+      'files.preview.empty': '选择一个项目查看预览',
+      'files.preview.directory': '文件夹',
+      'files.preview.meta': '信息',
+      'files.preview.path': '路径',
+      'files.preview.size': '大小',
+      'files.preview.kind': '类型',
+      'files.preview.modified': '修改时间',
+      'files.preview.truncated': '仅显示前 {size}',
+      'files.preview.unsupported': '此类型只显示信息，双击用默认应用打开。',
+      'files.action.open': '打开',
+      'files.action.reveal': '在访达中显示',
+      'files.action.copyPath': '复制路径',
+      'files.action.copyName': '复制名称',
+      'files.action.rename': '重命名',
+      'files.action.trash': '移到废纸篓',
+      'files.action.compress': '压缩为 ZIP',
+      'files.action.send': '发送到手机',
+      'files.dialog.newFolder': '新建文件夹',
+      'files.dialog.rename': '重命名',
+      'files.dialog.trash': '移到废纸篓',
+      'files.dialog.name': '名称',
+      'files.dialog.confirm': '确定',
+      'files.dialog.cancel': '取消',
+      'files.dialog.trashMessage': '将 {count} 个项目移到废纸篓？',
+      'files.dialog.trashHint': '可以从废纸篓恢复；此操作不会永久删除。',
+      'files.toast.created': '已新建文件夹',
+      'files.toast.renamed': '已重命名',
+      'files.toast.trashed': '已移到废纸篓',
+      'files.toast.copiedPath': '已复制路径',
+      'files.toast.copiedName': '已复制名称',
+      'files.toast.compressed': '已压缩：{path}',
+      'files.toast.sent': '已加入手机互传（{count} 个）',
+      'files.toast.dropped': '已导入 {count} 个文件',
+      'files.toast.uploading': '正在导入 {done}/{total}…',
+      'files.error.action': '操作失败：{message}',
+      'files.error.read': '无法读取此文件：{message}',
+      'files.error.unavailable': '文件浏览器在此环境不可用。',
+      'files.error.notWritable': '这里不可修改，请选择个人目录或磁盘中的位置。',
+      'files.dropActive': '松开以导入到当前文件夹',
+      'files.dropHint': '可以把文件从访达拖到这里',
+      'files.hint': '双击打开 · 空格预览 · ⌘C 复制路径 · ⌘⌫ 移到废纸篓',
+      'files.freeSpace': '可用空间 {size}',
     }
 
     const en = {
       'panel': 'Mac Tools',
       'title': 'Mac Tools',
-      'subtitle': 'Screenshots and annotations, a calculator, live status monitoring and phone transfer — all local.',
+      'subtitle': 'Screenshots and annotations, a file browser, a calculator, live status monitoring and phone transfer — all local.',
       'hostAria': 'Host connection status',
       'host.loading': 'Connecting to the local Host…',
       'host.ready': 'Host connected · v{version}',
@@ -980,6 +1202,14 @@ window.__ModuleLoader__.load({
       'monitor.badge.sensors': 'Sensors',
       'monitor.badge.fans': 'Fan control',
       'monitor.badge.battery': 'Battery',
+      'monitor.subnav.aria': 'Status sections',
+      'monitor.subnav.overview': 'Overview',
+      'monitor.subnav.sensors': 'Sensors',
+      'monitor.subnav.energy': 'Energy',
+      'monitor.subnav.fan': 'Fan',
+      'monitor.subnav.processes': 'Processes',
+      'monitor.subnav.alerts': 'Alerts',
+      'monitor.subnav.system': 'System',
       'monitor.available': 'Available',
       'monitor.unavailable': 'Unavailable',
       'monitor.unknown': 'Unknown',
@@ -1029,6 +1259,50 @@ window.__ModuleLoader__.load({
       'monitor.battery.remainingUnknown': 'Remaining time unknown',
       'monitor.battery.health': 'Health {percent}%',
       'monitor.battery.cycles': '{count} cycles',
+      'monitor.power.title': 'Power',
+      'monitor.power.meta': 'SoC',
+      'monitor.power.unit': 'Power',
+      'monitor.power.cpu': 'CPU',
+      'monitor.power.gpu': 'GPU',
+      'monitor.power.dram': 'DRAM',
+      'monitor.power.ane': 'ANE',
+      'monitor.power.energy': 'This session {value}',
+      'monitor.power.unavailable': 'Power readings are unavailable (Apple Silicon with IOReport required).',
+      'monitor.power.section.title': 'Power & cooling',
+      'monitor.power.section.meta': 'Power → temperature / fan',
+      'monitor.power.resistance': 'Thermal resistance',
+      'monitor.power.resistanceValue': '{value} °C/W',
+      'monitor.power.efficiency': 'Fan efficiency',
+      'monitor.power.efficiencyValue': '{value} RPM/W',
+      'monitor.power.scatter.temperature': 'Power → CPU temperature',
+      'monitor.power.scatter.fan': 'Power → fan speed',
+      'monitor.power.scatter.range': '{xMin}–{xMax} {xUnit} → {yMin}–{yMax} {yUnit}',
+      'monitor.power.scatter.empty': 'Not enough samples yet.',
+      'monitor.power.scatter.timeRange': 'Samples {range}',
+      'monitor.energy.title': 'Energy',
+      'monitor.energy.unit': 'kWh',
+      'monitor.energy.range.today': 'Today',
+      'monitor.energy.range.7d': '7 days',
+      'monitor.energy.range.30d': '30 days',
+      'monitor.energy.range.custom': 'Custom',
+      'monitor.energy.from': 'Start date',
+      'monitor.energy.to': 'End date',
+      'monitor.energy.apply': 'Apply',
+      'monitor.energy.totals': 'Today {today} kWh · total {total} kWh',
+      'monitor.energy.cost': 'Range cost ≈ ¥{cost} ({price} ¥/kWh)',
+      'monitor.energy.priceLabel': 'Price',
+      'monitor.energy.priceUnit': '¥/kWh',
+      'monitor.energy.priceSave': 'Save',
+      'monitor.energy.priceSaving': 'Saving…',
+      'monitor.energy.invalidPrice': 'The price must be a number between 0 and 100 ¥/kWh.',
+      'monitor.energy.group.auto': 'Auto',
+      'monitor.energy.group.day': 'Daily',
+      'monitor.energy.group.week': 'Weekly',
+      'monitor.energy.group.month': 'Monthly',
+      'monitor.energy.loading': 'Reading the energy ledger…',
+      'monitor.energy.empty': 'No energy recorded for this range (energy accumulates while the plugin runs).',
+      'monitor.energy.invalidRange': 'Pick both dates; the start date must not be after the end date.',
+      'monitor.energy.chartAria': 'Daily energy bar chart',
       'monitor.footer.uptime': 'Up {duration}',
       'monitor.footer.host': '{model} · {hostname}',
       'monitor.footer.os': '{os} {version}',
@@ -1092,9 +1366,12 @@ window.__ModuleLoader__.load({
       'monitor.fan.mode': 'Mode',
       'monitor.fan.mode.auto': 'Auto',
       'monitor.fan.mode.manual': 'Manual',
-      'monitor.fan.mode.curve': 'Curve',
+      'monitor.fan.mode.system': 'System auto',
       'monitor.fan.manual': 'Manual speed',
       'monitor.fan.manualHint': 'Committed when the slider is released (about 250 ms debounce).',
+      'monitor.fan.quick.rpm': 'RPM',
+      'monitor.fan.quick.full': 'Full speed',
+      'monitor.fan.quick.open': 'Open fan settings',
       'monitor.fan.manualValue': '{rpm} RPM',
       'monitor.fan.holding': 'Holding control · target {rpm} RPM',
       'monitor.fan.autoHolding': 'System auto control',
@@ -1108,7 +1385,7 @@ window.__ModuleLoader__.load({
       'monitor.fan.curve.points': '{count} points',
       'monitor.fan.curve.point': '{celsius} °C → {rpm} RPM',
       'monitor.fan.presets': 'Presets',
-      'monitor.fan.preset.auto': 'Auto',
+      'monitor.fan.preset.auto': 'System auto',
       'monitor.fan.preset.quiet': 'Quiet',
       'monitor.fan.preset.balanced': 'Balanced',
       'monitor.fan.preset.performance': 'Performance',
@@ -1128,14 +1405,12 @@ window.__ModuleLoader__.load({
       'monitor.processes.title': 'Top processes',
       'monitor.processes.expand': 'Expand the process ranking',
       'monitor.processes.collapse': 'Collapse the process ranking',
-      'monitor.processes.hint': 'Sorted by {sort} · refreshed every 3 s',
-      'monitor.processes.sortAria': 'Process sort order',
-      'monitor.processes.sort.cpu': 'CPU',
-      'monitor.processes.sort.memory': 'Memory',
+      'monitor.processes.hint': 'Click a column header to sort; click again to reverse · refreshed every 3 s',
+      'monitor.processes.sortHint': 'Sort by this column',
       'monitor.processes.loading': 'Reading the process list…',
       'monitor.processes.empty': 'No processes to show',
       'monitor.processes.error': 'Cannot read the process list: {message}',
-      'monitor.processes.pid': 'PID {pid}',
+      'monitor.processes.pid': 'PID',
       'monitor.processes.name': 'Process',
       'monitor.processes.cpu': 'CPU',
       'monitor.processes.memory': 'Memory',
@@ -1193,9 +1468,113 @@ window.__ModuleLoader__.load({
       'monitor.system.capability.pin': 'Pinned windows',
       'monitor.system.capability.history': 'Screenshot history',
       'monitor.system.capability.transfer': 'Phone transfer',
+      'monitor.system.capability.files': 'Files browser',
       'monitor.system.capability.monitor': 'Live status monitoring',
       'monitor.system.capability.fanControl': 'Fan control',
       'monitor.system.note': 'Memory, disk, battery, CPU and network values live in the overview cards above.',
+      'tab.files': 'Files',
+      'files.aria': 'File browser',
+      'files.places': 'Places',
+      'files.volumes': 'Volumes',
+      'files.recent': 'Recent',
+      'files.recentEmpty': 'No recent folders yet',
+      'files.place.home': 'Home',
+      'files.place.desktop': 'Desktop',
+      'files.place.documents': 'Documents',
+      'files.place.downloads': 'Downloads',
+      'files.place.pictures': 'Pictures',
+      'files.place.movies': 'Movies',
+      'files.place.music': 'Music',
+      'files.place.applications': 'Applications',
+      'files.place.custom': 'Pinned',
+      'files.free': '{size} free',
+      'files.toolbar.back': 'Back',
+      'files.toolbar.forward': 'Forward',
+      'files.toolbar.up': 'Up',
+      'files.toolbar.refresh': 'Refresh',
+      'files.toolbar.newFolder': 'New folder',
+      'files.toolbar.search': 'Search this folder',
+      'files.toolbar.sort': 'Sort',
+      'files.sort.name': 'Name',
+      'files.sort.size': 'Size',
+      'files.sort.mtime': 'Modified',
+      'files.sort.kind': 'Kind',
+      'files.order.asc': 'Ascending',
+      'files.order.desc': 'Descending',
+      'files.view.aria': 'Layout',
+      'files.view.list': 'List',
+      'files.view.icons': 'Icons',
+      'files.view.gallery': 'Gallery',
+      'files.showHidden': 'Show hidden',
+      'files.hideHidden': 'Hide hidden',
+      'files.loading': 'Reading folder…',
+      'files.empty': 'This folder is empty',
+      'files.emptyHint': 'Drop files here from Finder, or create a folder.',
+      'files.searchEmpty': 'No matching items',
+      'files.truncated': 'Too many items; showing the first {count}',
+      'files.notWritable': 'This location is read-only',
+      'files.system': 'System folder',
+      'files.status.items': '{count} items',
+      'files.status.selected': '{count} selected',
+      'files.status.none': 'Nothing selected',
+      'files.selection.aria': 'Actions for the selected items',
+      'files.status.free': '{size} free',
+      'files.column.name': 'Name',
+      'files.column.size': 'Size',
+      'files.column.mtime': 'Modified',
+      'files.kind.directory': 'Folder',
+      'files.kind.image': 'Image',
+      'files.kind.text': 'Text',
+      'files.kind.code': 'Code',
+      'files.kind.pdf': 'PDF',
+      'files.kind.archive': 'Archive',
+      'files.kind.audio': 'Audio',
+      'files.kind.video': 'Video',
+      'files.kind.symlink': 'Symbolic link',
+      'files.kind.other': 'File',
+      'files.preview.title': 'Preview',
+      'files.preview.empty': 'Select an item to preview it',
+      'files.preview.directory': 'Folder',
+      'files.preview.meta': 'Info',
+      'files.preview.path': 'Path',
+      'files.preview.size': 'Size',
+      'files.preview.kind': 'Kind',
+      'files.preview.modified': 'Modified',
+      'files.preview.truncated': 'Showing the first {size}',
+      'files.preview.unsupported': 'Only the metadata is shown; double-click to open it with the default app.',
+      'files.action.open': 'Open',
+      'files.action.reveal': 'Reveal in Finder',
+      'files.action.copyPath': 'Copy path',
+      'files.action.copyName': 'Copy name',
+      'files.action.rename': 'Rename',
+      'files.action.trash': 'Move to Trash',
+      'files.action.compress': 'Compress to ZIP',
+      'files.action.send': 'Send to phone',
+      'files.dialog.newFolder': 'New folder',
+      'files.dialog.rename': 'Rename',
+      'files.dialog.trash': 'Move to Trash',
+      'files.dialog.name': 'Name',
+      'files.dialog.confirm': 'Confirm',
+      'files.dialog.cancel': 'Cancel',
+      'files.dialog.trashMessage': 'Move {count} items to the Trash?',
+      'files.dialog.trashHint': 'You can restore them from the Trash; nothing is deleted permanently.',
+      'files.toast.created': 'Folder created',
+      'files.toast.renamed': 'Renamed',
+      'files.toast.trashed': 'Moved to Trash',
+      'files.toast.copiedPath': 'Path copied',
+      'files.toast.copiedName': 'Name copied',
+      'files.toast.compressed': 'Compressed: {path}',
+      'files.toast.sent': 'Added to phone transfer ({count})',
+      'files.toast.dropped': 'Imported {count} files',
+      'files.toast.uploading': 'Importing {done}/{total}…',
+      'files.error.action': 'Action failed: {message}',
+      'files.error.read': 'Could not read this file: {message}',
+      'files.error.unavailable': 'The file browser is unavailable in this environment.',
+      'files.error.notWritable': 'This location is read-only; choose a folder under your home directory or a volume.',
+      'files.dropActive': 'Drop to import into this folder',
+      'files.dropHint': 'Drop files here from Finder',
+      'files.hint': 'Double-click to open · Space to preview · ⌘C copies the path · ⌘⌫ moves to the Trash',
+      'files.freeSpace': '{size} available',
     }
 
     /**
@@ -1211,8 +1590,8 @@ window.__ModuleLoader__.load({
      */
     const css = `
 .dshMacToolsPage{width:100%;min-width:0;height:100%;min-height:0;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6;display:flex;overflow:hidden}
-.dshMacToolsScroll{scrollbar-gutter:stable;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px;flex:1;min-height:0;overflow:auto}
-.dshMacToolsContent{width:100%;max-width:980px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}
+.dshMacToolsScroll{scrollbar-gutter:stable;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px;flex:1;min-height:0;overflow:auto;overflow-x:hidden}
+.dshMacToolsContent{box-sizing:border-box;width:100%;max-width:none;margin:0;padding:0 clamp(18px,2.6vw,40px) 48px}
 .dshMacToolsHeading{display:flex;align-items:center;gap:14px;margin:0 0 16px;padding-top:28px}
 [data-platform=darwin] .dshMacToolsHeading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}
 .dshMacToolsHeadingMain{display:flex;align-items:center;gap:14px;flex:1;min-width:0}
@@ -1235,7 +1614,7 @@ window.__ModuleLoader__.load({
 .dshMacToolsTab:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dshMacToolsTabActive,.dshMacToolsTabActive:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font-weight:500}
 .dshMacToolsScreenshot{display:flex;flex-direction:column;min-width:0;gap:12px}
-.dshMacToolsTabPanel{animation:dshMacToolsFadeIn .18s ease-in-out}
+.dshMacToolsTabPanel{animation:dshMacToolsFadeIn .18s ease-in-out;min-width:0}
 .dshMacToolsTabPanel[hidden]{display:none}
 .dshMacToolsButton{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;flex:none;padding:0 13px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;transition:background .15s,border-color .15s,color .15s,opacity .15s}
 .dshMacToolsButton:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
@@ -1459,6 +1838,12 @@ window.__ModuleLoader__.load({
 .dshMacToolsTransferSkeleton{height:44px;flex:none;border-radius:10px}
 .dshMacToolsTransferToastRegion{position:relative}
 .dshMacToolsMonitor{display:flex;flex-direction:column;gap:14px;min-width:0}
+.dshMacToolsMonitorLayout{display:grid;grid-template-columns:156px minmax(0,1fr);gap:14px;align-items:start;min-width:0}
+.dshMacToolsMonitorSubnav{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dshMacToolsMonitorSubnavItem{display:flex;align-items:center;height:32px;padding:0 11px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dshMacToolsMonitorSubnavItem:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorSubnavItemActive,.dshMacToolsMonitorSubnavItemActive:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:500}
+.dshMacToolsMonitorSubbody{display:flex;flex-direction:column;gap:14px;min-width:0}
 .dshMacToolsMonitorToolbar{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;padding:9px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}
 .dshMacToolsMonitorSampledAt{flex:1;min-width:150px;margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
 .dshMacToolsMonitorBadges{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
@@ -1484,6 +1869,8 @@ window.__ModuleLoader__.load({
 .dshMacToolsMonitorSparklineTall{height:48px}
 .dshMacToolsMonitorSparkLine{fill:none;stroke-width:1.6;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;transition:none}
 .dshMacToolsMonitorSparkArea{stroke:none;opacity:.14;transition:none}
+.dshMacToolsMonitorChart{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dshMacToolsMonitorTimeline{display:flex;align-items:center;justify-content:space-between;gap:6px;color:var(--dsw-alias-label-caption);font-size:9px;line-height:13px;font-variant-numeric:tabular-nums}
 .dshMacToolsMonitorLegend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
 .dshMacToolsMonitorLegendItem{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dshMacToolsMonitorLegendDot{width:7px;height:7px;flex:none;border-radius:50%}
@@ -1497,6 +1884,29 @@ window.__ModuleLoader__.load({
 .dshMacToolsMonitorPressureWarning{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-state-warn-primary)}
 .dshMacToolsMonitorPressureCritical{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
 .dshMacToolsMonitorFooter{display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;grid-column:1/-1;padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorPowerBreakdown{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorPowerRow{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dshMacToolsMonitorPowerRowValue{color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorPowerReadouts{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;margin:0;padding:0;list-style:none}
+.dshMacToolsMonitorPowerReadout{display:flex;flex-direction:column;gap:1px;min-width:120px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dshMacToolsMonitorPowerReadoutLabel{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;white-space:nowrap}
+.dshMacToolsMonitorPowerReadoutValue{color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dshMacToolsMonitorPowerCharts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.dshMacToolsMonitorPowerChart{display:flex;flex-direction:column;gap:4px;min-width:0;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dshMacToolsMonitorPowerChartTitle{margin:0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px}
+.dshMacToolsMonitorScatter{display:block;width:100%;height:auto;transition:none}
+.dshMacToolsMonitorScatterGrid{stroke:var(--dsw-alias-border-l1);stroke-width:1;vector-effect:non-scaling-stroke}
+.dshMacToolsMonitorScatterDot{stroke:none;opacity:.72}
+.dshMacToolsMonitorScatterTrend{fill:none;stroke-width:1.6;stroke-dasharray:3 3;vector-effect:non-scaling-stroke;opacity:.85;transition:none}
+.dshMacToolsMonitorScatterRange{margin:0;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorEnergyCustom{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsMonitorEnergyDate{width:auto;min-width:132px;height:28px;padding:0 8px;font-size:12px}
+.dshMacToolsMonitorEnergyPrice{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dshMacToolsMonitorEnergyPriceInput{width:92px;height:28px;padding:0 8px;font-size:12px}
+.dshMacToolsMonitorEnergyChart{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dshMacToolsMonitorEnergyBars{display:block;width:100%;height:auto;transition:none}
+.dshMacToolsMonitorEnergyBar{fill:var(--dsw-alias-state-business-primary);opacity:.85;transition:none}
+.dshMacToolsMonitorEnergyAxis{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;font-variant-numeric:tabular-nums}
 .dshMacToolsMonitorSection{padding:14px 16px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);min-width:0}
 .dshMacToolsMonitorSectionHead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
 .dshMacToolsMonitorSectionTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:20px}
@@ -1554,17 +1964,23 @@ window.__ModuleLoader__.load({
 .dshMacToolsMonitorFanFooter{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
 .dshMacToolsMonitorFanBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dshMacToolsMonitorFanBar .dshMacToolsButton{margin-left:auto}
+.dshMacToolsMonitorFanQuickActions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
 .dshMacToolsMonitorInstallText{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;overflow-wrap:anywhere}
 .dshMacToolsMonitorInstallMeta{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:18px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .dshMacToolsMonitorProcessSort{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .dshMacToolsMonitorProcessTable{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none}
-.dshMacToolsMonitorProcessRow{display:grid;grid-template-columns:minmax(0,1fr) 62px 62px 78px auto;align-items:center;gap:4px 10px;padding:6px 9px;border-radius:9px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsMonitorProcessRow{display:grid;grid-template-columns:minmax(0,1fr) 58px 54px 54px 70px auto;align-items:center;gap:4px 10px;padding:6px 9px;border-radius:9px;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
 .dshMacToolsMonitorProcessRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dshMacToolsMonitorProcessRowHead,.dshMacToolsMonitorProcessRowHead:hover{background:transparent;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;letter-spacing:.02em;text-transform:uppercase}
 .dshMacToolsMonitorProcessName{display:flex;flex-direction:column;min-width:0}
 .dshMacToolsMonitorProcessLabel{color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dshMacToolsMonitorProcessPid{color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px}
 .dshMacToolsMonitorProcessValue{color:var(--dsw-alias-label-secondary);text-align:right}
+.dshMacToolsMonitorProcessSortButton{display:flex;align-items:center;gap:3px;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:10px;line-height:15px;letter-spacing:.02em;text-transform:uppercase;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dshMacToolsMonitorProcessSortButton:hover{color:var(--dsw-alias-label-primary)}
+.dshMacToolsMonitorProcessSortButtonEnd{justify-content:flex-end}
+.dshMacToolsMonitorProcessSortButtonActive,.dshMacToolsMonitorProcessSortButtonActive:hover{color:var(--dsw-alias-label-primary);font-weight:500}
+.dshMacToolsMonitorProcessSortArrow{font-size:9px;line-height:1;color:var(--dsw-alias-state-business-primary)}
 .dshMacToolsMonitorProcessActions{display:flex;justify-content:flex-end}
 .dshMacToolsMonitorKill{height:24px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:17px;cursor:pointer;white-space:nowrap}
 .dshMacToolsMonitorKill:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
@@ -1593,6 +2009,122 @@ window.__ModuleLoader__.load({
 .dshMacToolsMonitorEventTime{margin-left:auto;color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;white-space:nowrap}
 .dshMacToolsMonitorSkeleton{height:220px}
 .dshMacToolsMonitorEmpty{margin:0;padding:14px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.dshMacToolsFiles{display:grid;grid-template-columns:208px minmax(0,1fr);gap:14px;align-items:start;min-height:520px}
+.dshMacToolsFilesSidebar{display:flex;flex-direction:column;gap:14px;min-width:0;padding:10px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsFilesSidebarSection{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dshMacToolsFilesSidebarTitle{margin:0 0 3px;padding:0 8px;color:var(--dsw-alias-label-caption);font-size:10px;line-height:16px;font-weight:500;letter-spacing:.04em;text-transform:uppercase}
+.dshMacToolsFilesPlace{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}
+.dshMacToolsFilesPlace:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshMacToolsFilesPlaceActive,.dshMacToolsFilesPlaceActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-state-business-primary);font-weight:500}
+.dshMacToolsFilesPlaceIcon{display:inline-flex;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshMacToolsFilesPlaceActive .dshMacToolsFilesPlaceIcon{color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsFilesPlaceText{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsFilesPlaceMeta{flex:none;color:var(--dsw-alias-label-caption);font-size:10px;line-height:16px;font-variant-numeric:tabular-nums}
+.dshMacToolsFilesMain{display:flex;flex-direction:column;gap:10px;min-width:0}
+.dshMacToolsFilesToolbar{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;padding:7px 9px;border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsFilesCrumbs{display:flex;align-items:center;gap:1px;flex:1 1 180px;min-width:120px;flex-wrap:wrap;overflow:hidden}
+.dshMacToolsFilesCrumb{min-width:0;max-width:220px;padding:3px 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsFilesCrumb:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dshMacToolsFilesCrumbCurrent,.dshMacToolsFilesCrumbCurrent:hover{color:var(--dsw-alias-label-primary);font-weight:500;cursor:default}
+.dshMacToolsFilesCrumbSep{flex:none;color:var(--dsw-alias-label-caption);font-size:11px;line-height:18px}
+.dshMacToolsFilesSearch{flex:1 1 140px;min-width:110px;height:30px}
+.dshMacToolsFilesSelect{box-sizing:border-box;height:30px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l3);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;outline:none}
+.dshMacToolsFilesSelect:focus{border-color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsFilesBody{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:10px;min-width:0;align-items:stretch}
+.dshMacToolsFilesBodyDrop{outline:2px dashed var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:12px}
+.dshMacToolsFilesListWrap{display:flex;flex-direction:column;min-width:0;min-height:360px;border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}
+.dshMacToolsFilesListHead{display:grid;grid-template-columns:minmax(0,1fr) 82px 128px;align-items:center;gap:8px;padding:6px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-caption);font-size:10px;line-height:15px;letter-spacing:.02em;text-transform:uppercase}
+.dshMacToolsFilesHeadRight{text-align:right}
+.dshMacToolsFilesList{flex:1;min-height:0;max-height:440px;overflow:auto;margin:0;padding:4px;list-style:none;outline:none}
+.dshMacToolsFilesRow{display:grid;grid-template-columns:minmax(0,1fr) 82px 128px;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;cursor:default;user-select:none;-webkit-user-select:none}
+.dshMacToolsFilesRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsFilesRowActive,.dshMacToolsFilesRowActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent);color:var(--dsw-alias-label-primary)}
+.dshMacToolsFilesRowName{display:flex;align-items:center;gap:7px;min-width:0}
+.dshMacToolsFilesRowName .dshMacToolsFilesGlyph{flex:none}
+.dshMacToolsFilesRowLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}
+.dshMacToolsFilesRowMeta{text-align:right;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsFilesEmptyList{padding:28px 16px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px;text-align:center}
+.dshMacToolsFilesPreview{display:flex;flex-direction:column;min-width:0;max-height:480px;padding:11px 13px;border:.5px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);overflow:auto}
+.dshMacToolsFilesPreviewHead{display:flex;align-items:center;gap:7px;margin:0 0 8px;color:var(--dsw-alias-label-caption);font-size:10px;line-height:16px;letter-spacing:.04em;text-transform:uppercase}
+.dshMacToolsFilesPreviewKind{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10px;text-transform:none;letter-spacing:0}
+.dshMacToolsFilesPreviewTitle{margin:0 0 8px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;font-weight:500;overflow-wrap:anywhere}
+.dshMacToolsFilesPreviewImage{display:block;max-width:100%;max-height:280px;margin:0 auto;border-radius:8px;background:var(--dsw-alias-bg-layer-2);object-fit:contain}
+.dshMacToolsFilesPreviewText{margin:0 0 8px;padding:9px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11px;line-height:17px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}
+.dshMacToolsFilesMetaRow{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:2px 0;font-size:12px;line-height:18px}
+.dshMacToolsFilesMetaLabel{flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshMacToolsFilesMetaValue{min-width:0;text-align:right;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.dshMacToolsFilesMetaValueMono{font-family:var(--dsw-font-markdown-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:10px;line-height:16px}
+.dshMacToolsFilesPreviewEmpty{margin:0;padding:18px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+.dshMacToolsFilesSelectionBar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 9px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsFilesSelectionBarIdle{background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsFilesSelectionBarIdle .dshMacToolsFilesSelectionCount{color:var(--dsw-alias-label-tertiary)}
+.dshMacToolsFilesSelectionCount{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.dshMacToolsFilesStatusbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-caption);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums}
+.dshMacToolsFilesStatusSpacer{margin-left:auto}
+.dshMacToolsFilesToolbarSpacer{margin-left:auto}
+.dshMacToolsFilesDialog{padding:11px 13px;border:.5px solid var(--dsw-alias-state-business-primary);border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dshMacToolsFilesDialogTitle{margin:0 0 6px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;font-weight:500}
+.dshMacToolsFilesDialogText{margin:0 0 8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.dshMacToolsFilesDialogRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dshMacToolsFilesDialogActions{display:flex;align-items:center;gap:6px;margin-left:auto}
+.dshMacToolsFilesDialogError{margin:6px 0 0;color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+.dshMacToolsFilesMenu{position:fixed;z-index:1100;min-width:176px;padding:4px;border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent)}
+.dshMacToolsFilesMenuItem{display:flex;align-items:center;gap:8px;width:100%;padding:6px 9px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}
+.dshMacToolsFilesMenuItem:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsFilesMenuItem:disabled{cursor:not-allowed;opacity:.4}
+.dshMacToolsFilesMenuItemDanger{color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsFilesMenuItemDanger:hover{background:var(--dsw-alias-interactive-bg-hover-danger)}
+.dshMacToolsFilesMenuSep{height:.5px;margin:4px 6px;background:var(--dsw-alias-border-l1)}
+.dshMacToolsFilesNotice{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;overflow-wrap:anywhere}
+.dshMacToolsFilesLoading{margin:0;padding:18px 4px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+.dshMacToolsFiles{min-width:0;max-width:100%}
+.dshMacToolsFilesMain,.dshMacToolsFilesBody{min-width:0;max-width:100%}
+.dshMacToolsFilesGlyph{display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--dsw-alias-label-tertiary)}
+.dshMacToolsFilesIcon-directory{color:var(--dsw-alias-state-warn-primary)}
+.dshMacToolsFilesIcon-image{color:var(--dsw-alias-state-success-primary)}
+.dshMacToolsFilesIcon-pdf{color:var(--dsw-alias-state-error-primary)}
+.dshMacToolsFilesIcon-text{color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsFilesIcon-archive{color:var(--dsw-alias-state-business-primary)}
+.dshMacToolsFilesIcon-audio{color:var(--dsw-alias-brand-primary)}
+.dshMacToolsFilesIcon-video{color:var(--dsw-alias-brand-primary)}
+.dshMacToolsFilesIcon-other{color:var(--dsw-alias-label-caption)}
+.dshMacToolsFilesThumbWrap{position:relative;display:inline-grid;place-items:center;flex:none;border-radius:8px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.dshMacToolsFilesThumbImg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsFilesGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:4px;flex:1;min-height:0;max-height:520px;overflow:auto;margin:0;padding:8px;list-style:none;outline:none}
+.dshMacToolsFilesTile{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0;padding:10px 8px;border-radius:10px;cursor:default;user-select:none;-webkit-user-select:none;text-align:center}
+.dshMacToolsFilesTile:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsFilesTileActive,.dshMacToolsFilesTileActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent)}
+.dshMacToolsFilesTileIcon{display:grid;place-items:center;width:52px;height:52px;flex:none}
+.dshMacToolsFilesTileImg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:8px;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsFilesTile .dshMacToolsFilesThumbWrap{width:44px;height:44px}
+.dshMacToolsFilesTileName{max-width:100%;color:var(--dsw-alias-label-primary);font-size:11px;line-height:15px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.dshMacToolsFilesTileMeta{color:var(--dsw-alias-label-caption);font-size:10px;line-height:14px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.dshMacToolsFilesBodyGallery{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsFilesGalleryWrap{overflow:visible;max-height:none;min-height:460px}
+.dshMacToolsFilesGallery{display:flex;flex-direction:column;min-width:0;flex:1;min-height:0}
+.dshMacToolsFilesGalleryStage{display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 16px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1)}
+.dshMacToolsFilesGalleryContent{position:relative;display:grid;place-items:center;width:100%;min-height:180px;max-height:420px}
+.dshMacToolsFilesGalleryImageWrap{position:relative;display:flex;align-items:center;justify-content:center;width:100%;min-height:220px}
+.dshMacToolsFilesGalleryFallback{position:absolute;inset:0;display:grid;place-items:center}
+.dshMacToolsFilesGalleryImage{position:relative;z-index:1;max-width:100%;max-height:380px;object-fit:contain;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsFilesGalleryText{max-height:340px;max-width:820px;margin:0}
+.dshMacToolsFilesGalleryTitle{margin:0;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;font-weight:500;text-align:center;overflow-wrap:anywhere}
+.dshMacToolsFilesGalleryMeta{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;font-variant-numeric:tabular-nums;text-align:center}
+.dshMacToolsFilesGalleryStrip{display:flex;align-items:flex-start;gap:4px;flex:none;margin:0;padding:8px;overflow-x:auto;list-style:none;outline:none}
+.dshMacToolsFilesStripItem{display:flex;flex-direction:column;align-items:center;gap:4px;flex:none;width:78px;padding:6px 5px;border-radius:8px;cursor:default;user-select:none}
+.dshMacToolsFilesStripItem:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshMacToolsFilesStripItemActive,.dshMacToolsFilesStripItemActive:hover{background:var(--dsw-alias-interactive-bg-hover-accent)}
+.dshMacToolsFilesStripImg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:6px;background:var(--dsw-alias-bg-layer-2)}
+.dshMacToolsFilesStripItem .dshMacToolsFilesThumbWrap{width:30px;height:30px}
+.dshMacToolsFilesStripName{width:100%;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:14px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dshMacToolsFilesStripItemActive .dshMacToolsFilesStripName{color:var(--dsw-alias-label-primary)}
+@media (max-width:860px){
+.dshMacToolsFiles{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsFilesSidebar{flex-direction:row;flex-wrap:wrap;align-items:flex-start}
+.dshMacToolsFilesSidebarSection{min-width:140px;flex:1}
+.dshMacToolsFilesBody{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsFilesPreview{max-height:none}
+}
 @media (max-width:760px){
 .dshMacToolsContent{padding:0 20px 32px}
 .dshMacToolsHeading{padding-top:20px;align-items:flex-start;flex-wrap:wrap}
@@ -1604,8 +2136,13 @@ window.__ModuleLoader__.load({
 .dshMacToolsTransferColumns{grid-template-columns:minmax(0,1fr)}
 .dshMacToolsTransferQrRow{gap:12px}
 .dshMacToolsMonitorOverview{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsMonitorPowerCharts{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsMonitorLayout{grid-template-columns:minmax(0,1fr)}
+.dshMacToolsMonitorSubnav{flex-direction:row;gap:4px;overflow-x:auto}
+.dshMacToolsMonitorSubnavItem{flex:none}
 .dshMacToolsMonitorProcessRow{grid-template-columns:minmax(0,1fr) 54px 54px auto}
 .dshMacToolsMonitorProcessValueRss{display:none}
+.dshMacToolsMonitorProcessValuePid{display:none}
 }
 @media (prefers-reduced-motion:reduce){
 .dshMacToolsPage *,.dshMacToolsToast,.dshMacToolsTextInput{animation:none!important;transition:none!important}
@@ -2109,6 +2646,25 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Format a byte count for the Files tab (B / KB / MB / GB / TB).
+     *
+     * @param {number} bytes - the byte count.
+     * @returns {string} the formatted size, or an em dash when unknown.
+     */
+    function filesSizeText(bytes) {
+      if (!Number.isFinite(bytes) || bytes < 0) return '—'
+      if (bytes < 1024) return `${Math.round(bytes)} B`
+      const units = ['KB', 'MB', 'GB', 'TB']
+      let value = bytes / 1024
+      let index = 0
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024
+        index += 1
+      }
+      return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[index]}`
+    }
+
+    /**
      * Format a 0–100 percentage for display.
      *
      * @param {number} percent - the percentage.
@@ -2417,6 +2973,201 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Format an epoch timestamp as a local HH:MM:SS clock for a chart timeline.
+     *
+     * @param {number|null} epochMs - epoch milliseconds.
+     * @returns {string} the clock text, or an em dash when unavailable.
+     */
+    function monitorClockText(epochMs) {
+      if (!Number.isFinite(epochMs)) return '—'
+      const date = new Date(epochMs)
+      const pad = (value) => (value < 10 ? `0${value}` : String(value))
+      return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    }
+
+    /**
+     * The start / middle / end timeline labels for one history ring.
+     *
+     * @param {{ t: number }[]} points - history entries with epoch stamps.
+     * @returns {string[]} up to three clock labels.
+     */
+    function monitorTimelineTicks(points) {
+      const list = Array.isArray(points)
+        ? points.filter((point) => point !== null && typeof point === 'object' && Number.isFinite(point.t))
+        : []
+      if (list.length === 0) return []
+      if (list.length === 1) return [monitorClockText(list[0].t)]
+      const middle = list[Math.floor((list.length - 1) / 2)]
+      return [monitorClockText(list[0].t), monitorClockText(middle.t), monitorClockText(list[list.length - 1].t)]
+    }
+
+    /**
+     * The clock range of one history ring, e.g. "14:45:30 – 14:46:30".
+     *
+     * @param {{ t: number }[]} points - history entries with epoch stamps.
+     * @returns {string} the range text, or an empty string when there is no data.
+     */
+    function monitorTimelineRange(points) {
+      const list = Array.isArray(points)
+        ? points.filter((point) => point !== null && typeof point === 'object' && Number.isFinite(point.t))
+        : []
+      if (list.length === 0) return ''
+      if (list.length === 1) return monitorClockText(list[0].t)
+      return `${monitorClockText(list[0].t)} – ${monitorClockText(list[list.length - 1].t)}`
+    }
+
+    /**
+     * Format an SoC power reading.
+     *
+     * @param {number|null} value - watts.
+     * @returns {string} e.g. "19.8 W", or an em dash when unavailable.
+     */
+    function monitorWattsText(value) {
+      if (!Number.isFinite(value)) return '—'
+      return `${value >= 100 ? Math.round(value) : value.toFixed(1)} W`
+    }
+
+    /**
+     * Format accumulated energy. Small totals keep milliwatt-hour precision so
+     * a freshly started monitor still shows a moving number.
+     *
+     * @param {number|null} wh - watt-hours.
+     * @returns {string} e.g. "0.042 Wh", or an em dash when unavailable.
+     */
+    function monitorEnergyText(wh) {
+      if (!Number.isFinite(wh)) return '—'
+      if (wh >= 100) return `${Math.round(wh)} Wh`
+      if (wh >= 10) return `${wh.toFixed(1)} Wh`
+      if (wh >= 1) return `${wh.toFixed(2)} Wh`
+      return `${wh.toFixed(3)} Wh`
+    }
+
+    /**
+     * Format a Wh amount as 电度数 (kWh). The unit is rendered separately so the
+     * headline stays compact.
+     *
+     * @param {number|null} wh - watt-hours.
+     * @returns {string} e.g. "0.31", or an em dash when unavailable.
+     */
+    function monitorKwhText(wh) {
+      if (!Number.isFinite(wh) || wh < 0) return '—'
+      const kwh = wh / 1000
+      if (kwh >= 100) return String(Math.round(kwh))
+      if (kwh >= 10) return kwh.toFixed(1)
+      return kwh.toFixed(2)
+    }
+
+    /**
+     * Format an electricity cost in 元. Small amounts keep extra decimals so a
+     * day's cost does not read as "¥0.00".
+     *
+     * @param {number|null} yuan - the cost in 元.
+     * @returns {string} e.g. "0.17", or an em dash when unavailable.
+     */
+    function monitorMoneyText(yuan) {
+      if (!Number.isFinite(yuan) || yuan < 0) return '—'
+      if (yuan === 0) return '0.00'
+      if (yuan >= 100) return yuan.toFixed(0)
+      if (yuan >= 1) return yuan.toFixed(2)
+      if (yuan >= 0.01) return yuan.toFixed(3)
+      return yuan.toFixed(4)
+    }
+
+    /**
+     * Format a local Date as the Host's `YYYY-MM-DD` key.
+     *
+     * @param {Date} date - a local date.
+     * @returns {string} the date key.
+     */
+    function monitorDateKey(date) {
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    }
+
+    /**
+     * Parse a local `YYYY-MM-DD` key into a Date at local noon (DST-safe).
+     *
+     * @param {string} dateKey - the date key.
+     * @returns {Date | null} the date, or null when the key is malformed.
+     */
+    function monitorDateFromKey(dateKey) {
+      if (typeof dateKey !== 'string') return null
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(dateKey)
+      if (match === null) return null
+      return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12)
+    }
+
+    /**
+     * Resolve the effective bar grouping: "auto" picks by range length so a
+     * 30-day range stays readable while a year does not render 366 bars.
+     *
+     * @param {number} dayCount - days in the queried range.
+     * @param {string} groupBy - "auto" | "day" | "week" | "month".
+     * @returns {'day' | 'week' | 'month'} the effective grouping.
+     */
+    function monitorEnergyGroupFor(dayCount, groupBy) {
+      if (groupBy === 'day' || groupBy === 'week' || groupBy === 'month') return groupBy
+      if (dayCount <= 31) return 'day'
+      if (dayCount <= 120) return 'week'
+      return 'month'
+    }
+
+    /**
+     * Bucket the daily Wh values for the bar chart. Weeks start on Monday (the
+     * operator's calendar) and months are calendar months; buckets are summed
+     * client-side so the Host answer stays daily.
+     *
+     * @param {{ date: string, wh: number }[]} days - oldest → newest.
+     * @param {'day' | 'week' | 'month'} groupBy - the effective grouping.
+     * @returns {{ key: string, start: string, end: string, wh: number }[]} the buckets, oldest → newest.
+     */
+    function monitorEnergyBuckets(days, groupBy) {
+      const list = Array.isArray(days) ? days : []
+      const buckets = new Map()
+      for (const day of list) {
+        if (day === null || typeof day !== 'object' || typeof day.date !== 'string') continue
+        const wh = Number.isFinite(day.wh) && day.wh > 0 ? day.wh : 0
+        let key = day.date
+        let start = day.date
+        let end = day.date
+        if (groupBy === 'month') {
+          key = day.date.slice(0, 7)
+          start = `${key}-01`
+          end = day.date
+        } else if (groupBy === 'week') {
+          const date = monitorDateFromKey(day.date)
+          if (date === null) continue
+          const offset = (date.getDay() + 6) % 7
+          const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - offset, 12)
+          const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 12)
+          start = monitorDateKey(monday)
+          end = monitorDateKey(sunday)
+          key = start
+        }
+        const bucket = buckets.get(key)
+        if (bucket === undefined) buckets.set(key, { key, start, end, wh })
+        else {
+          bucket.wh += wh
+          bucket.end = end
+        }
+      }
+      return [...buckets.values()]
+    }
+
+    /**
+     * Format one axis bound of a scatter chart.
+     *
+     * @param {number} value - the bound.
+     * @returns {string} the formatted number.
+     */
+    function monitorAxisNumber(value) {
+      if (!Number.isFinite(value)) return '—'
+      return Math.abs(value) >= 100 ? String(Math.round(value)) : value.toFixed(1)
+    }
+
+    /**
      * Localize the SMC availability reason.
      *
      * @param {Function} t - the bound translator.
@@ -2609,6 +3360,104 @@ window.__ModuleLoader__.load({
       if (!Number.isFinite(max)) max = min + 1
       if (!(max > min)) max = min + 1
       return { min, max }
+    }
+
+    /**
+     * Pair two history rings by sample index, keeping only finite pairs. The
+     * rings are pushed together, so equal indices describe the same tick; the
+     * pairing walks from the newest entry so a ring that started later still
+     * lines up.
+     *
+     * @param {Array<{value:number}>} xs - the x ring.
+     * @param {Array<{value:number}>} ys - the y ring.
+     * @returns {{ x: number, y: number }[]} the paired points.
+     */
+    function monitorHistoryPairs(xs, ys) {
+      const left = Array.isArray(xs) ? xs : []
+      const right = Array.isArray(ys) ? ys : []
+      const count = Math.min(left.length, right.length)
+      const pairs = []
+      for (let offset = 1; offset <= count; offset += 1) {
+        const x = left[left.length - offset]?.value
+        const y = right[right.length - offset]?.value
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+        pairs.push({ x, y })
+      }
+      return pairs
+    }
+
+    /**
+     * Map scatter points into SVG coordinates and fit a least-squares trend
+     * line. The trend makes the power → temperature / fan relationship readable
+     * even when the dots are noisy.
+     *
+     * @param {{ x: number, y: number }[]} rawPoints - paired samples.
+     * @param {number} width - the viewBox width.
+     * @param {number} height - the viewBox height.
+     * @returns {{ dots: { cx: number, cy: number }[], trend: string, xMin: number, xMax: number, yMin: number, yMax: number, count: number }} the geometry.
+     */
+    function monitorScatterGeometry(rawPoints, width, height) {
+      const points = Array.isArray(rawPoints)
+        ? rawPoints.filter((point) => point !== null && typeof point === 'object'
+          && Number.isFinite(point.x) && Number.isFinite(point.y))
+        : []
+      if (points.length === 0) {
+        return { dots: [], trend: '', xMin: 0, xMax: 0, yMin: 0, yMax: 0, count: 0 }
+      }
+      const padding = 6
+      let xMin = Math.min(...points.map((point) => point.x))
+      let xMax = Math.max(...points.map((point) => point.x))
+      let yMin = Math.min(...points.map((point) => point.y))
+      let yMax = Math.max(...points.map((point) => point.y))
+      if (xMax - xMin < 1e-6) { xMin -= 1; xMax += 1 }
+      if (yMax - yMin < 1e-6) { yMin -= 1; yMax += 1 }
+      const spanX = xMax - xMin
+      const spanY = yMax - yMin
+      const toX = (value) => padding + ((value - xMin) / spanX) * (width - padding * 2)
+      const toY = (value) => height - padding - ((value - yMin) / spanY) * (height - padding * 2)
+      const dots = points.map((point) => ({ cx: toX(point.x), cy: toY(point.y) }))
+      const count = points.length
+      const meanX = points.reduce((sum, point) => sum + point.x, 0) / count
+      const meanY = points.reduce((sum, point) => sum + point.y, 0) / count
+      let numerator = 0
+      let denominator = 0
+      for (const point of points) {
+        numerator += (point.x - meanX) * (point.y - meanY)
+        denominator += (point.x - meanX) ** 2
+      }
+      let trend = ''
+      if (count >= 2 && denominator > 1e-9) {
+        const slope = numerator / denominator
+        const intercept = meanY - slope * meanX
+        const startY = slope * xMin + intercept
+        const endY = slope * xMax + intercept
+        trend = `M${toX(xMin).toFixed(2)} ${toY(startY).toFixed(2)}L${toX(xMax).toFixed(2)} ${toY(endY).toFixed(2)}`
+      }
+      return { dots, trend, xMin, xMax, yMin, yMax, count }
+    }
+
+    /**
+     * Lay out one bar per day for the energy chart. A zero-energy day still gets
+     * its slot so the range keeps its calendar shape.
+     *
+     * @param {{ date: string, wh: number }[]} days - oldest → newest.
+     * @param {number} width - the viewBox width.
+     * @param {number} height - the viewBox height.
+     * @returns {{ bars: { x: number, y: number, w: number, h: number, wh: number, date: string }[], maxWh: number }} the layout.
+     */
+    function monitorEnergyBarGeometry(buckets, width, height) {
+      const list = Array.isArray(buckets) ? buckets : []
+      if (list.length === 0) return { bars: [], maxWh: 0 }
+      const maxWh = Math.max(...list.map((bucket) => (Number.isFinite(bucket.wh) && bucket.wh > 0 ? bucket.wh : 0)), 1)
+      const slot = width / list.length
+      const gap = list.length > 31 ? 1 : 3
+      const barWidth = Math.max(1, slot - gap)
+      const bars = list.map((bucket, index) => {
+        const wh = Number.isFinite(bucket.wh) && bucket.wh > 0 ? bucket.wh : 0
+        const barHeight = wh === 0 ? 0 : Math.max(1, (wh / maxWh) * height)
+        return { x: index * slot + (slot - barWidth) / 2, y: height - barHeight, w: barWidth, h: barHeight, wh }
+      })
+      return { bars, maxWh }
     }
 
     /**
@@ -2954,6 +3803,65 @@ window.__ModuleLoader__.load({
         ['rect', { x: 12, y: 3, width: 5, height: 5, rx: 0.8 }],
         ['rect', { x: 3, y: 12, width: 5, height: 5, rx: 0.8 }],
         ['path', { d: 'M12.2 12.2 H14.2 V14.2 H12.2 Z M15.6 12.2 H17.2 M12.2 15.6 H14.2 V17.2 M15.6 15.6 H17.2 V17.2' }],
+      ],      folder: [
+        ['path', { d: 'M2.8 6.2 A1.4 1.4 0 0 1 4.2 4.8 H8 L9.8 6.8 H15.8 A1.4 1.4 0 0 1 17.2 8.2 V14.2 A1.4 1.4 0 0 1 15.8 15.6 H4.2 A1.4 1.4 0 0 1 2.8 14.2 Z' }],
+      ],
+      document: [
+        ['path', { d: 'M5.2 2.8 H11.6 L15 6.2 V17.2 H5.2 Z' }],
+        ['path', { d: 'M11.6 2.8 V6.2 H15' }],
+        ['path', { d: 'M7.4 10.2 H12.8 M7.4 13 H12.8' }],
+      ],
+      file: [
+        ['path', { d: 'M5.2 2.8 H11.6 L15 6.2 V17.2 H5.2 Z' }],
+        ['path', { d: 'M11.6 2.8 V6.2 H15' }],
+      ],
+      home: [
+        ['path', { d: 'M3.2 9.4 L10 3.4 L16.8 9.4' }],
+        ['path', { d: 'M5.4 8.6 V16 H14.6 V8.6' }],
+      ],
+      arrowLeft: [['path', { d: 'M11.6 4.6 L6.2 10 L11.6 15.4' }]],
+      arrowRight: [['path', { d: 'M8.4 4.6 L13.8 10 L8.4 15.4' }]],
+      arrowUp: [
+        ['path', { d: 'M4.6 8.6 L10 3.6 L15.4 8.6' }],
+        ['path', { d: 'M10 3.9 V16.4' }],
+      ],
+      plus: [['path', { d: 'M10 4.2 V15.8 M4.2 10 H15.8' }]],
+      trash: [
+        ['path', { d: 'M4 6.2 H16' }],
+        ['path', { d: 'M7.2 6.2 V4.2 H12.8 V6.2' }],
+        ['path', { d: 'M5.5 6.2 L6.3 16.2 H13.7 L14.5 6.2' }],
+      ],
+      archive: [
+        ['rect', { x: 3.6, y: 3.4, width: 12.8, height: 3.8, rx: 1 }],
+        ['path', { d: 'M4.8 7.2 V16 H15.2 V7.2' }],
+        ['path', { d: 'M10 8 V11.4' }],
+      ],
+      folderSolid: [
+        ['path', { d: 'M2.4 6.3 A1.7 1.7 0 0 1 4.1 4.6 H7.7 L9.6 6.8 H15.9 A1.7 1.7 0 0 1 17.6 8.5 V14.3 A1.7 1.7 0 0 1 15.9 16 H4.1 A1.7 1.7 0 0 1 2.4 14.3 Z', fill: 'currentColor', stroke: 'none' }],
+      ],
+      audio: [
+        ['path', { d: 'M7.6 14.2 V5.6 L14 4.2 V12.6' }],
+        ['circle', { cx: 5.9, cy: 14.6, r: 1.7, fill: 'currentColor', stroke: 'none' }],
+        ['circle', { cx: 12.3, cy: 13, r: 1.7, fill: 'currentColor', stroke: 'none' }],
+      ],
+      video: [
+        ['rect', { x: 2.8, y: 4.4, width: 14.4, height: 11.2, rx: 2.2 }],
+        ['path', { d: 'M8.3 7.6 L13.1 10 L8.3 12.4 Z', fill: 'currentColor', stroke: 'none' }],
+      ],
+      listView: [
+        ['path', { d: 'M7 5.5 H17 M7 10 H17 M7 14.5 H17' }],
+        ['path', { d: 'M3.4 5.5 H3.42 M3.4 10 H3.42 M3.4 14.5 H3.42' }],
+      ],
+      gridView: [
+        ['rect', { x: 3.4, y: 3.4, width: 5.4, height: 5.4, rx: 1.2 }],
+        ['rect', { x: 11.2, y: 3.4, width: 5.4, height: 5.4, rx: 1.2 }],
+        ['rect', { x: 3.4, y: 11.2, width: 5.4, height: 5.4, rx: 1.2 }],
+        ['rect', { x: 11.2, y: 11.2, width: 5.4, height: 5.4, rx: 1.2 }],
+      ],
+      galleryView: [
+        ['rect', { x: 2.8, y: 3.4, width: 14.4, height: 9.2, rx: 1.6 }],
+        ['path', { d: 'M3.2 15.8 H16.8' }],
+        ['path', { d: 'M4.6 17.8 H7.4 M8.6 17.8 H11.4 M12.6 17.8 H15.4' }],
       ],
     }
 
@@ -3103,7 +4011,33 @@ window.__ModuleLoader__.load({
         return `${API_PATH}?inbox=${encodeURIComponent(item.id)}&t=${version}`
       }
 
-      return { post, shotUrl, historyUrl, inboxUrl }
+      /**
+       * The same-origin URL for one local file's inline raster preview.
+       *
+       * @param {string} path - absolute file path.
+       * @param {string|number} version - cache buster (usually the mtime).
+       * @returns {string} the GET URL.
+       */
+      function fileUrl(path, version) {
+        const stamp = typeof version === 'string' ? Date.parse(version) : Number(version)
+        return `${API_PATH}?file=${encodeURIComponent(path)}&t=${Number.isFinite(stamp) ? stamp : Date.now()}`
+      }
+
+      /**
+       * The same-origin URL for one local file's Quick Look thumbnail.
+       *
+       * @param {string} path - absolute file path.
+       * @param {string|number} version - cache buster (usually the mtime).
+       * @param {number} [size] - longest thumbnail edge in pixels.
+       * @returns {string} the GET URL.
+       */
+      function thumbUrl(path, version, size) {
+        const stamp = typeof version === 'string' ? Date.parse(version) : Number(version)
+        const edge = Number.isFinite(size) ? Math.round(size) : 512
+        return `${API_PATH}?thumb=${encodeURIComponent(path)}&size=${edge}&t=${Number.isFinite(stamp) ? stamp : Date.now()}`
+      }
+
+      return { post, shotUrl, historyUrl, inboxUrl, fileUrl, thumbUrl }
     }
 
     /**
@@ -3143,7 +4077,7 @@ window.__ModuleLoader__.load({
       const listeners = new Set()
       let snapshot = {
         host: { kind: 'loading', value: null, http: 0, message: '' },
-        tab: 'screenshot',
+        tab: 'monitor',
         hideApp: false,
         hideAppAvailable: false,
         hotkey: { recording: false, saving: false, error: null },
@@ -3168,6 +4102,7 @@ window.__ModuleLoader__.load({
           value: null,
           error: null,
           paused: false,
+          sub: 'overview',
           intervalMs: MONITOR_POLL_MS,
           fetchedAt: 0,
           processes: {
@@ -3176,12 +4111,58 @@ window.__ModuleLoader__.load({
             value: null,
             error: null,
             sort: 'cpu',
+            order: 'desc',
             armedPid: null,
             killingPid: null,
             actionError: null,
           },
+          energy: {
+            range: 'today',
+            from: '',
+            to: '',
+            groupBy: 'auto',
+            status: 'idle',
+            value: null,
+            error: null,
+            fetchedAt: 0,
+            priceDraft: '',
+            priceSaving: false,
+            priceError: null,
+          },
           fan: { pending: null, error: null },
           alerts: { saving: false, testing: false, error: null },
+        },
+        files: {
+          places: { status: 'idle', favorites: [], volumes: [], recents: [], startDirectory: '', error: null },
+          path: '',
+          back: [],
+          forward: [],
+          listing: {
+            status: 'idle',
+            entries: [],
+            parent: null,
+            writable: false,
+            system: false,
+            freeBytes: null,
+            totalBytes: null,
+            truncated: false,
+            total: 0,
+            error: null,
+          },
+          sort: 'name',
+          order: 'asc',
+          showHidden: false,
+          view: 'list',
+          query: '',
+          selection: [],
+          anchor: null,
+          preview: { status: 'idle', entry: null, kind: 'none', text: null, truncated: false, url: '', error: null },
+          busy: null,
+          actionError: null,
+          dialog: null,
+          toast: null,
+          dropActive: false,
+          upload: { active: false, done: 0, total: 0 },
         },
       }
       let hostRequest = null
@@ -3228,10 +4209,26 @@ window.__ModuleLoader__.load({
        * answer for the previous sort cannot overwrite the current ranking.
        */
       let monitorProcessGeneration = 0
+      /** The in-flight `monitorEnergy` read. */
+      let monitorEnergyRequest = null
+      /** Whether a range change landed mid-flight and needs one more read. */
+      let monitorEnergyReload = false
+      /**
+       * Bumped when the energy range changes, so an answer for the previous
+       * range cannot overwrite the current chart.
+       */
+      let monitorEnergyGeneration = 0
       /** The in-flight alert-save promise, so double clicks cannot stack. */
       let monitorAlertSaveRequest = null
       /** The in-flight alert-test promise. */
       let monitorAlertTestRequest = null
+      /** In-flight Files-tab reads, deduped like the transfer polls. */
+      let filesPlacesRequest = null
+      let filesListRequest = null
+      let filesPreviewRequest = null
+      /** Bumped by every new listing/preview, so stale answers are dropped. */
+      let filesListGeneration = 0
+      let filesPreviewGeneration = 0
       /**
        * A `fanApply` payload queued while another apply was in flight. The
        * latest release wins; only one write is ever outstanding.
@@ -4463,6 +5460,26 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Switch the status page's sub-page. The process ranking only polls while
+       * its own sub-page is visible, so selecting it seeds the first read and
+       * leaving it closes the disclosure (which stops the 3 s timer).
+       *
+       * @param {string} sub - one of the MONITOR_SUBS ids.
+       * @returns {void}
+       */
+      function setMonitorSub(sub) {
+        const next = MONITOR_SUBS.some((entry) => entry.id === sub) ? sub : 'overview'
+        if (snapshot.monitor.sub === next) return
+        updateMonitor({ sub: next })
+        if (next === 'processes') {
+          updateMonitorProcesses({ open: true })
+          void loadMonitorProcesses()
+        } else if (snapshot.monitor.processes.open === true) {
+          updateMonitorProcesses({ open: false })
+        }
+      }
+
+      /**
        * Toggle the process section. Polling is owned by the visible tab and
        * only runs while this is open; opening seeds the first read.
        *
@@ -4483,11 +5500,16 @@ window.__ModuleLoader__.load({
        * @returns {void}
        */
       function setMonitorProcessSort(sort) {
-        const next = sort === 'memory' ? 'memory' : 'cpu'
+        const next = MONITOR_PROCESS_SORTS.indexOf(sort) >= 0 ? sort : 'cpu'
         const processes = snapshot.monitor.processes
-        if (processes.sort === next) return
+        const currentOrder = processes.order === 'asc' ? 'asc' : 'desc'
+        // A second click on the active column reverses it; a new column starts
+        // in its natural direction (resource columns descending).
+        const order = processes.sort === next
+          ? (currentOrder === 'asc' ? 'desc' : 'asc')
+          : (MONITOR_PROCESS_DESCENDING_SORTS.indexOf(next) >= 0 ? 'desc' : 'asc')
         monitorProcessGeneration += 1
-        updateMonitorProcesses({ sort: next, armedPid: null, actionError: null })
+        updateMonitorProcesses({ sort: next, order, armedPid: null, actionError: null })
         if (processes.open === true) void loadMonitorProcesses()
       }
 
@@ -4509,12 +5531,13 @@ window.__ModuleLoader__.load({
         const keepError = firstLoad !== true && state.error !== null && state.error !== undefined
         const generation = monitorProcessGeneration
         const sort = state.sort
+        const order = state.order === 'asc' ? 'asc' : 'desc'
         let aborted = false
         updateMonitorProcesses({
           status: firstLoad ? 'loading' : (keepError ? 'error' : 'ready'),
           error: keepError ? state.error : null,
         })
-        const run = host.post('monitorProcesses', { sort }, options).then((value) => {
+        const run = host.post('monitorProcesses', { sort, order }, options).then((value) => {
           if (generation !== monitorProcessGeneration) return false
           const record = value !== null && typeof value === 'object' ? value : {}
           const processes = Array.isArray(record.processes) ? record.processes : []
@@ -4524,6 +5547,7 @@ window.__ModuleLoader__.load({
             value: {
               sampledAt: typeof record.sampledAt === 'string' ? record.sampledAt : '',
               sort: typeof record.sort === 'string' ? record.sort : sort,
+              order: record.order === 'asc' || record.order === 'desc' ? record.order : order,
               count,
               processes,
             },
@@ -4570,6 +5594,245 @@ window.__ModuleLoader__.load({
         monitorProcessesReload = false
         if (snapshot.monitor.processes.open !== true) return
         void loadMonitorProcesses()
+      }
+
+      /**
+       * Replace part of the energy sub-slice.
+       *
+       * @param {object} patch - the energy fields to replace.
+       * @returns {void}
+       */
+      function updateMonitorEnergy(patch) {
+        updateMonitor({ energy: Object.assign({}, snapshot.monitor.energy, patch) })
+      }
+
+      /**
+       * Format a Date as the Host's local `YYYY-MM-DD` key.
+       *
+       * @param {Date} date - a local date.
+       * @returns {string} the date key.
+       */
+      function monitorLocalDateKey(date) {
+        const year = date.getFullYear()
+        const month = String(date.getMonth() + 1).padStart(2, '0')
+        const day = String(date.getDate()).padStart(2, '0')
+        return `${year}-${month}-${day}`
+      }
+
+      /**
+       * Resolve the selected energy range into the `monitorEnergy` payload.
+       * Presets are computed from the local calendar so the Host's default
+       * "today" cannot disagree with the selected button around midnight.
+       *
+       * @param {{ range: string, from: string, to: string }} energy - the slice.
+       * @returns {{ from: string, to: string } | null} the payload, or null when a custom range is incomplete.
+       */
+      function monitorEnergyPayload(energy) {
+        if (energy.range === 'custom') {
+          const from = typeof energy.from === 'string' ? energy.from.trim() : ''
+          const to = typeof energy.to === 'string' ? energy.to.trim() : ''
+          if (!/^\d{4}-\d{2}-\d{2}$/u.test(from) || !/^\d{4}-\d{2}-\d{2}$/u.test(to)) return null
+          return { from, to }
+        }
+        const days = energy.range === '7d' ? 7 : (energy.range === '30d' ? 30 : 1)
+        const today = new Date()
+        const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1))
+        return { from: monitorLocalDateKey(start), to: monitorLocalDateKey(today) }
+      }
+
+      /**
+       * Read the daily energy for the selected range. Deduped; a stale answer
+       * for a previous range is discarded through the generation counter.
+       *
+       * @param {{ signal?: AbortSignal }} [options] - transport options.
+       * @returns {Promise<boolean>} whether the range was adopted.
+       */
+      function loadMonitorEnergy(options) {
+        if (monitorEnergyRequest !== null) {
+          monitorEnergyReload = true
+          return monitorEnergyRequest
+        }
+        const energy = snapshot.monitor.energy
+        const request = monitorEnergyPayload(energy)
+        if (request === null) return Promise.resolve(false)
+        const firstLoad = energy.value === null
+        const keepError = firstLoad !== true && energy.error !== null && energy.error !== undefined
+        const generation = monitorEnergyGeneration
+        updateMonitorEnergy({
+          status: firstLoad ? 'loading' : (keepError ? 'error' : 'ready'),
+          error: keepError ? energy.error : null,
+        })
+        const run = host.post('monitorEnergy', request, options).then((value) => {
+          if (generation !== monitorEnergyGeneration) return false
+          const record = value !== null && typeof value === 'object' ? value : {}
+          const days = Array.isArray(record.days)
+            ? record.days
+              .filter((entry) => entry !== null && typeof entry === 'object' && typeof entry.date === 'string')
+              .map((entry) => ({ date: entry.date, wh: Number.isFinite(entry.wh) ? entry.wh : 0 }))
+            : []
+          updateMonitorEnergy({
+            status: 'ready',
+            value: {
+              from: typeof record.from === 'string' ? record.from : request.from,
+              to: typeof record.to === 'string' ? record.to : request.to,
+              days,
+              totalWh: Number.isFinite(record.totalWh) ? record.totalWh : 0,
+              averageWh: Number.isFinite(record.averageWh) ? record.averageWh : 0,
+            },
+            error: null,
+            fetchedAt: Date.now(),
+          })
+          return true
+        }).catch((error) => {
+          const failure = describeFailure(error)
+          const current = snapshot.monitor.energy
+          if (failure.code === 'aborted') {
+            updateMonitorEnergy({ status: current.value === null ? 'idle' : 'ready' })
+            return false
+          }
+          if (generation !== monitorEnergyGeneration) return false
+          updateMonitorEnergy({
+            status: current.value === null ? 'error' : 'ready',
+            error: failure,
+          })
+          return false
+        }).then((result) => {
+          monitorEnergyRequest = null
+          drainMonitorEnergyReload()
+          return result
+        }, (error) => {
+          monitorEnergyRequest = null
+          drainMonitorEnergyReload()
+          throw error
+        })
+        monitorEnergyRequest = run
+        return run
+      }
+
+      /**
+       * Re-read the ledger when a range change landed mid-flight, so the chart
+       * always matches the selected range.
+       *
+       * @returns {void}
+       */
+      function drainMonitorEnergyReload() {
+        if (monitorEnergyReload !== true) return
+        monitorEnergyReload = false
+        void loadMonitorEnergy()
+      }
+
+      /**
+       * Switch the energy range. Custom mode only reveals the date inputs; the
+       * 应用 button applies it, so a half-typed date never queries the Host.
+       *
+       * @param {string} range - "today" | "7d" | "30d" | "custom".
+       * @returns {void}
+       */
+      function setMonitorEnergyRange(range) {
+        const next = MONITOR_ENERGY_RANGES.indexOf(range) >= 0 ? range : 'today'
+        const energy = snapshot.monitor.energy
+        if (energy.range === next) return
+        monitorEnergyGeneration += 1
+        if (next === 'custom') {
+          // Seed the two date inputs with the last seven days so the operator
+          // adjusts a sensible range instead of typing both dates from empty.
+          const seed = monitorEnergyPayload({ range: '7d', from: '', to: '' })
+          const from = typeof energy.from === 'string' && energy.from !== '' ? energy.from : (seed === null ? '' : seed.from)
+          const to = typeof energy.to === 'string' && energy.to !== '' ? energy.to : (seed === null ? '' : seed.to)
+          updateMonitorEnergy({ range: next, from, to, status: 'idle', error: null })
+          return
+        }
+        updateMonitorEnergy({ range: next, status: 'idle', error: null })
+        void loadMonitorEnergy()
+      }
+
+      /**
+       * Edit one custom date input.
+       *
+       * @param {string} field - "from" or "to".
+       * @param {string} value - the input value.
+       * @returns {void}
+       */
+      function setMonitorEnergyField(field, value) {
+        if (field !== 'from' && field !== 'to') return
+        updateMonitorEnergy({ [field]: typeof value === 'string' ? value : '' })
+      }
+
+      /**
+       * Apply the custom date range. Both dates must be present and ordered;
+       * the Host re-validates, so a crafted payload still refuses.
+       *
+       * @returns {Promise<boolean>} whether a query was started.
+       */
+      function applyMonitorEnergyCustom() {
+        const energy = snapshot.monitor.energy
+        if (energy.range !== 'custom') return Promise.resolve(false)
+        const request = monitorEnergyPayload(energy)
+        if (request === null || request.from > request.to) {
+          updateMonitorEnergy({
+            status: 'error',
+            error: { code: 'invalid_range', message: 'the custom range is incomplete', details: {} },
+          })
+          return Promise.resolve(false)
+        }
+        monitorEnergyGeneration += 1
+        updateMonitorEnergy({ status: 'idle', error: null })
+        return loadMonitorEnergy()
+      }
+
+      /**
+       * Switch the bar-chart grouping. "auto" picks by range length so a
+       * 30-day range stays readable without the operator choosing.
+       *
+       * @param {string} groupBy - "auto" | "day" | "week" | "month".
+       * @returns {void}
+       */
+      function setMonitorEnergyGroupBy(groupBy) {
+        const next = MONITOR_ENERGY_GROUPS.indexOf(groupBy) >= 0 ? groupBy : 'auto'
+        if (snapshot.monitor.energy.groupBy === next) return
+        updateMonitorEnergy({ groupBy: next })
+      }
+
+      /**
+       * Edit the electricity-price input.
+       *
+       * @param {string} value - the raw input value.
+       * @returns {void}
+       */
+      function setMonitorEnergyPriceDraft(value) {
+        updateMonitorEnergy({ priceDraft: typeof value === 'string' ? value : '', priceError: null })
+      }
+
+      /**
+       * Persist the electricity price (元/度). The Host re-validates and returns
+       * the refreshed energy summary, which replaces the snapshot's block; the
+       * range query is re-read so the cost figures follow the new price.
+       *
+       * @returns {Promise<boolean>} whether the price was saved.
+       */
+      function saveMonitorEnergyPrice() {
+        if (snapshot.monitor.energy.priceSaving === true) return Promise.resolve(false)
+        const price = Number(snapshot.monitor.energy.priceDraft)
+        if (!Number.isFinite(price) || price < 0 || price > 100) {
+          updateMonitorEnergy({
+            priceError: { code: 'invalid_price', message: 'the price must be between 0 and 100', details: {} },
+          })
+          return Promise.resolve(false)
+        }
+        updateMonitorEnergy({ priceSaving: true, priceError: null })
+        return host.post('energyPriceSave', { pricePerKwh: price }).then((value) => {
+          const block = value !== null && typeof value === 'object' ? value : null
+          const monitor = snapshot.monitor
+          if (block !== null && monitor.value !== null && typeof monitor.value === 'object') {
+            updateMonitor({ value: Object.assign({}, monitor.value, { energy: block }) })
+          }
+          updateMonitorEnergy({ priceSaving: false, priceDraft: '', priceError: null })
+          void loadMonitorEnergy()
+          return true
+        }).catch((error) => {
+          updateMonitorEnergy({ priceSaving: false, priceError: describeFailure(error) })
+          return false
+        })
       }
 
       /**
@@ -4927,6 +6190,673 @@ window.__ModuleLoader__.load({
         updateMonitorAlerts({ error: null })
       }
 
+      // -------------------------------------------------------------------
+      // Files tab
+      // -------------------------------------------------------------------
+
+      /**
+       * Replace part of the Files slice.
+       *
+       * @param {object} patch - fields to replace.
+       * @returns {void}
+       */
+      function publishFiles(patch) {
+        publish({ files: Object.assign({}, snapshot.files, patch) })
+      }
+
+      /**
+       * Replace part of the Files places slice.
+       *
+       * @param {object} patch - fields to replace.
+       * @returns {void}
+       */
+      function updateFilesPlaces(patch) {
+        publishFiles({ places: Object.assign({}, snapshot.files.places, patch) })
+      }
+
+      /**
+       * Replace part of the Files listing slice.
+       *
+       * @param {object} patch - fields to replace.
+       * @returns {void}
+       */
+      function updateFilesListing(patch) {
+        publishFiles({ listing: Object.assign({}, snapshot.files.listing, patch) })
+      }
+
+      /** @returns {object} a fresh, empty preview slice. */
+      function emptyFilesPreview() {
+        return { status: 'idle', entry: null, kind: 'none', text: null, truncated: false, url: '', error: null }
+      }
+
+      /**
+       * Replace part of the Files preview slice.
+       *
+       * @param {object} patch - fields to replace.
+       * @returns {void}
+       */
+      function updateFilesPreview(patch) {
+        publishFiles({ preview: Object.assign({}, snapshot.files.preview, patch) })
+      }
+
+      /**
+       * Show one Files toast.
+       *
+       * @param {string} key - locale key.
+       * @param {object} [params] - interpolation values.
+       * @param {'success'|'error'} [kind] - toast tone.
+       * @returns {void}
+       */
+      function filesShowToast(key, params, kind) {
+        publishFiles({
+          toast: {
+            key,
+            params: params === undefined || params === null ? {} : params,
+            kind: kind === 'error' ? 'error' : 'success',
+          },
+        })
+      }
+
+      /**
+       * Read the Files sidebar's places (standard folders, volumes, recents).
+       *
+       * @returns {Promise<boolean>} whether the Host answered.
+       */
+      function loadFilesPlaces() {
+        if (filesPlacesRequest !== null) return filesPlacesRequest
+        updateFilesPlaces({ status: 'loading', error: null })
+        const run = host.post('filesPlaces', {}).then((value) => {
+          const places = value !== null && typeof value === 'object' ? value : {}
+          updateFilesPlaces({
+            status: 'ready',
+            error: null,
+            favorites: Array.isArray(places.favorites) ? places.favorites : [],
+            volumes: Array.isArray(places.volumes) ? places.volumes : [],
+            recents: Array.isArray(places.recents) ? places.recents : [],
+            startDirectory: typeof places.startDirectory === 'string' ? places.startDirectory : '',
+          })
+          if (typeof places.showHidden === 'boolean' && snapshot.files.path === '') {
+            publishFiles({ showHidden: places.showHidden })
+          }
+          return true
+        }).catch((error) => {
+          updateFilesPlaces({ status: 'error', error: describeFailure(error) })
+          return false
+        }).then((result) => {
+          filesPlacesRequest = null
+          return result
+        }, (error) => {
+          filesPlacesRequest = null
+          throw error
+        })
+        filesPlacesRequest = run
+        return run
+      }
+
+      /**
+       * List one directory and adopt the answer.
+       *
+       * @param {string} path - absolute directory path.
+       * @param {{ reset?: boolean, traverse?: boolean }} [options] - history behaviour.
+       * @returns {Promise<boolean>} whether the listing landed.
+       */
+      function listFiles(path, options) {
+        const settings = options === undefined || options === null ? {} : options
+        const target = typeof path === 'string' ? path.trim() : ''
+        if (target === '') return Promise.resolve(false)
+        const previous = snapshot.files.path
+        const back = snapshot.files.back.slice()
+        const forward = snapshot.files.forward.slice()
+        if (settings.reset === true) {
+          back.length = 0
+          forward.length = 0
+        } else if (settings.traverse !== false && previous !== '' && previous !== target) {
+          back.push(previous)
+          forward.length = 0
+        }
+        filesListGeneration += 1
+        filesPreviewGeneration += 1
+        const generation = filesListGeneration
+        publishFiles({
+          path: target,
+          back,
+          forward,
+          selection: [],
+          anchor: null,
+          actionError: null,
+          preview: emptyFilesPreview(),
+        })
+        updateFilesListing({ status: 'loading', error: null })
+        const request = {
+          path: target,
+          sort: snapshot.files.sort,
+          order: snapshot.files.order,
+          showHidden: snapshot.files.showHidden,
+        }
+        const run = host.post('filesList', request).then((value) => {
+          if (generation !== filesListGeneration) return false
+          const listing = value !== null && typeof value === 'object' ? value : {}
+          const entries = Array.isArray(listing.entries) ? listing.entries : []
+          updateFilesListing({
+            status: 'ready',
+            error: null,
+            entries,
+            parent: typeof listing.parent === 'string' ? listing.parent : null,
+            writable: listing.writable === true,
+            system: listing.system === true,
+            freeBytes: Number.isFinite(listing.freeBytes) ? listing.freeBytes : null,
+            totalBytes: Number.isFinite(listing.totalBytes) ? listing.totalBytes : null,
+            truncated: listing.truncated === true,
+            total: Number.isFinite(listing.total) ? listing.total : entries.length,
+          })
+          void refreshFilesPlacesQuietly()
+          return true
+        }).catch((error) => {
+          if (generation !== filesListGeneration) return false
+          updateFilesListing({ status: 'error', error: describeFailure(error) })
+          return false
+        }).then((result) => {
+          filesListRequest = null
+          return result
+        }, (error) => {
+          filesListRequest = null
+          throw error
+        })
+        filesListRequest = run
+        return run
+      }
+
+      /**
+       * Refresh the sidebar's recent folders and volume free space after a
+       * navigation, without touching the places skeleton or its error card.
+       *
+       * @returns {Promise<boolean>} whether the refresh landed.
+       */
+      function refreshFilesPlacesQuietly() {
+        return host.post('filesPlaces', {}).then((value) => {
+          const places = value !== null && typeof value === 'object' ? value : {}
+          const patch = {}
+          if (Array.isArray(places.recents)) patch.recents = places.recents
+          if (Array.isArray(places.volumes)) patch.volumes = places.volumes
+          if (Object.keys(patch).length > 0) updateFilesPlaces(patch)
+          return true
+        }).catch(() => false)
+      }
+
+      /** @returns {Promise<boolean>} whether a back step ran. */
+      function filesGoBack() {
+        const files = snapshot.files
+        if (files.back.length === 0) return Promise.resolve(false)
+        const back = files.back.slice()
+        const target = back.pop()
+        const forward = files.forward.concat([files.path])
+        publishFiles({ back, forward })
+        return listFiles(target, { traverse: false })
+      }
+
+      /** @returns {Promise<boolean>} whether a forward step ran. */
+      function filesGoForward() {
+        const files = snapshot.files
+        if (files.forward.length === 0) return Promise.resolve(false)
+        const forward = files.forward.slice()
+        const target = forward.pop()
+        const back = files.back.concat([files.path])
+        publishFiles({ back, forward })
+        return listFiles(target, { traverse: false })
+      }
+
+      /** @returns {Promise<boolean>} whether the parent folder was opened. */
+      function filesUp() {
+        const parent = snapshot.files.listing.parent
+        if (typeof parent !== 'string' || parent === '') return Promise.resolve(false)
+        return listFiles(parent)
+      }
+
+      /** @returns {Promise<boolean>} whether the current folder was re-read. */
+      function filesRefresh() {
+        if (snapshot.files.path === '') return Promise.resolve(false)
+        return listFiles(snapshot.files.path, { traverse: false })
+      }
+
+      /**
+       * Change the sort key (or flip the order when it is already active).
+       *
+       * @param {string} sort - one of {@link FILES_SORTS}.
+       * @returns {Promise<boolean>} whether the listing was refreshed.
+       */
+      function filesSetSort(sort) {
+        if (FILES_SORTS.indexOf(sort) < 0) return Promise.resolve(false)
+        const order = sort === snapshot.files.sort
+          ? (snapshot.files.order === 'asc' ? 'desc' : 'asc')
+          : 'asc'
+        publishFiles({ sort, order, selection: [], anchor: null })
+        return listFiles(snapshot.files.path, { traverse: false })
+      }
+
+      /**
+       * Set the sort direction.
+       *
+       * @param {'asc'|'desc'} order - the direction.
+       * @returns {Promise<boolean>} whether the listing was refreshed.
+       */
+      function filesSetOrder(order) {
+        if ((order !== 'asc' && order !== 'desc') || order === snapshot.files.order) return Promise.resolve(false)
+        publishFiles({ order, selection: [], anchor: null })
+        return listFiles(snapshot.files.path, { traverse: false })
+      }
+
+      /**
+       * Switch the Files layout between list, icons and gallery.
+       *
+       * @param {'list'|'icons'|'gallery'} view - the layout mode.
+       * @returns {void}
+       */
+      function filesSetView(view) {
+        if (FILES_VIEWS.indexOf(view) < 0 || view === snapshot.files.view) return
+        publishFiles({ view })
+      }
+
+      /**
+       * The same-origin preview URL for one raster image entry.
+       *
+       * @param {object} entry - a file-browser entry.
+       * @returns {string} the URL, or an empty string when the entry has no path.
+       */
+      function filesImageUrl(entry) {
+        if (entry === null || typeof entry !== 'object' || typeof entry.path !== 'string' || entry.path === '') return ''
+        return host.fileUrl(entry.path, entry.mtime)
+      }
+
+      /** @returns {Promise<boolean>} whether the listing was refreshed. */
+      function filesToggleHidden() {
+        publishFiles({ showHidden: snapshot.files.showHidden !== true, selection: [], anchor: null })
+        return listFiles(snapshot.files.path, { traverse: false })
+      }
+
+      /**
+       * Filter the visible rows by name.
+       *
+       * @param {string} query - the search text.
+       * @returns {void}
+       */
+      function filesSetQuery(query) {
+        publishFiles({ query: typeof query === 'string' ? query : '', selection: [], anchor: null })
+      }
+
+      /**
+       * Select one row, toggle it, or extend the selection to a range.
+       *
+       * @param {string} path - the row path.
+       * @param {'single'|'toggle'|'range'} mode - selection mode.
+       * @param {object[]} [visible] - the currently visible rows (filters the range).
+       * @returns {void}
+       */
+      function filesSelect(path, mode, visible) {
+        const target = typeof path === 'string' ? path : ''
+        if (target === '') return
+        const rows = Array.isArray(visible) ? visible : snapshot.files.listing.entries
+        if (mode === 'toggle') {
+          const current = snapshot.files.selection
+          const next = current.indexOf(target) >= 0
+            ? current.filter((entry) => entry !== target)
+            : current.concat([target])
+          publishFiles({ selection: next, anchor: target })
+          return
+        }
+        if (mode === 'range' && typeof snapshot.files.anchor === 'string') {
+          const start = rows.findIndex((entry) => entry.path === snapshot.files.anchor)
+          const end = rows.findIndex((entry) => entry.path === target)
+          if (start >= 0 && end >= 0) {
+            const from = Math.min(start, end)
+            const to = Math.max(start, end)
+            publishFiles({ selection: rows.slice(from, to + 1).map((entry) => entry.path) })
+            return
+          }
+        }
+        publishFiles({ selection: [target], anchor: target })
+      }
+
+      /** @returns {void} */
+      function filesClearSelection() {
+        if (snapshot.files.selection.length === 0) return
+        publishFiles({ selection: [], anchor: null })
+      }
+
+      /**
+       * Preview one directory entry in the right-hand pane.
+       *
+       * @param {object|null} entry - the file-browser entry.
+       * @returns {Promise<boolean>} whether a preview landed.
+       */
+      function filesPreview(entry) {
+        if (entry === null || typeof entry !== 'object') {
+          filesPreviewGeneration += 1
+          publishFiles({ preview: emptyFilesPreview() })
+          return Promise.resolve(false)
+        }
+        filesPreviewGeneration += 1
+        const generation = filesPreviewGeneration
+        const base = { status: 'ready', entry, kind: 'info', text: null, truncated: false, url: '', error: null }
+        const ext = typeof entry.ext === 'string' ? entry.ext.toLowerCase() : ''
+        if (entry.kind === 'directory' || entry.directory === true) {
+          publishFiles({ preview: Object.assign({}, base, { kind: 'directory' }) })
+          return Promise.resolve(true)
+        }
+        if (FILES_IMAGE_EXTENSIONS.indexOf(ext) >= 0) {
+          publishFiles({ preview: Object.assign({}, base, { kind: 'image', url: host.fileUrl(entry.path, entry.mtime) }) })
+          return Promise.resolve(true)
+        }
+        if (ext === 'pdf') {
+          publishFiles({ preview: Object.assign({}, base, { kind: 'thumb', url: host.thumbUrl(entry.path, entry.mtime, 640) }) })
+          return Promise.resolve(true)
+        }
+        if (FILES_TEXT_EXTENSIONS.indexOf(ext) >= 0) {
+          publishFiles({ preview: Object.assign({}, base, { status: 'loading' }) })
+          const run = host.post('filesRead', { path: entry.path }).then((value) => {
+            if (generation !== filesPreviewGeneration) return false
+            const read = value !== null && typeof value === 'object' ? value : {}
+            publishFiles({
+              preview: Object.assign({}, base, {
+                kind: 'text',
+                text: typeof read.text === 'string' ? read.text : '',
+                truncated: read.truncated === true,
+                bytes: Number.isFinite(read.bytes) ? read.bytes : 0,
+              }),
+            })
+            return true
+          }).catch((error) => {
+            if (generation !== filesPreviewGeneration) return false
+            publishFiles({ preview: Object.assign({}, base, { status: 'error', error: describeFailure(error) }) })
+            return false
+          }).then((result) => {
+            filesPreviewRequest = null
+            return result
+          }, (error) => {
+            filesPreviewRequest = null
+            throw error
+          })
+          filesPreviewRequest = run
+          return run
+        }
+        publishFiles({ preview: Object.assign({}, base, { kind: 'thumb', url: host.thumbUrl(entry.path, entry.mtime, 640) }) })
+        return Promise.resolve(true)
+      }
+
+      /** Fall back to metadata when a thumbnail or image URL cannot load. @returns {void} */
+      function filesPreviewImageFailed() {
+        const preview = snapshot.files.preview
+        if (preview.entry === null) return
+        publishFiles({ preview: Object.assign({}, preview, { kind: 'info', url: '' }) })
+      }
+
+      /**
+       * Open an entry: folders are listed, files open in their default app.
+       *
+       * @param {object} entry - the file-browser entry.
+       * @returns {Promise<boolean>} whether the action ran.
+       */
+      function filesActivate(entry) {
+        if (entry === null || typeof entry !== 'object') return Promise.resolve(false)
+        if (entry.kind === 'directory' || entry.directory === true) return listFiles(entry.path)
+        return filesOpenPath(entry.path)
+      }
+
+      /**
+       * Open one path with the system default application.
+       *
+       * @param {string} path - absolute path.
+       * @returns {Promise<boolean>} whether the Host accepted it.
+       */
+      function filesOpenPath(path) {
+        return host.post('filesOpen', { path }).then(() => true).catch((error) => {
+          publishFiles({ actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Reveal one path in Finder.
+       *
+       * @param {string} path - absolute path.
+       * @returns {Promise<boolean>} whether the Host accepted it.
+       */
+      function filesReveal(path) {
+        return host.post('filesReveal', { path }).then(() => true).catch((error) => {
+          publishFiles({ actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Copy file paths to the macOS clipboard.
+       *
+       * @param {string[]} paths - the selected paths.
+       * @returns {Promise<boolean>} whether the clipboard was written.
+       */
+      function filesCopyPath(paths) {
+        const list = Array.isArray(paths) ? paths.filter((entry) => typeof entry === 'string' && entry !== '') : []
+        if (list.length === 0) return Promise.resolve(false)
+        return host.post('clipboard', { action: 'write', text: list.join('\n') }).then(() => {
+          filesShowToast('files.toast.copiedPath')
+          return true
+        }).catch((error) => {
+          publishFiles({ actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Copy file names to the macOS clipboard.
+       *
+       * @param {string[]} names - the file names.
+       * @returns {Promise<boolean>} whether the clipboard was written.
+       */
+      function filesCopyName(names) {
+        const list = Array.isArray(names) ? names.filter((entry) => typeof entry === 'string' && entry !== '') : []
+        if (list.length === 0) return Promise.resolve(false)
+        return host.post('clipboard', { action: 'write', text: list.join('\n') }).then(() => {
+          filesShowToast('files.toast.copiedName')
+          return true
+        }).catch((error) => {
+          publishFiles({ actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Open the new-folder / rename / trash dialog.
+       *
+       * @param {'newFolder'|'rename'|'trash'} kind - dialog kind.
+       * @param {object} [payload] - extra fields (`path`, `paths`).
+       * @returns {void}
+       */
+      function filesOpenDialog(kind, payload) {
+        if (kind !== 'newFolder' && kind !== 'rename' && kind !== 'trash') return
+        publishFiles({
+          dialog: Object.assign({ kind, value: '' }, payload === undefined || payload === null ? {} : payload),
+          actionError: null,
+        })
+      }
+
+      /**
+       * Update the dialog's text field.
+       *
+       * @param {string} value - the current text.
+       * @returns {void}
+       */
+      function filesSetDialogValue(value) {
+        const dialog = snapshot.files.dialog
+        if (dialog === null) return
+        publishFiles({ dialog: Object.assign({}, dialog, { value: typeof value === 'string' ? value : '' }) })
+      }
+
+      /** @returns {void} */
+      function filesCloseDialog() {
+        if (snapshot.files.dialog === null) return
+        publishFiles({ dialog: null, actionError: null })
+      }
+
+      /**
+       * Apply the open dialog (create folder, rename, or move to trash).
+       *
+       * @returns {Promise<boolean>} whether the action succeeded.
+       */
+      function filesConfirmDialog() {
+        const dialog = snapshot.files.dialog
+        if (dialog === null) return Promise.resolve(false)
+        publishFiles({ busy: dialog.kind, actionError: null })
+        /** @type {Promise<any>} */
+        let request
+        if (dialog.kind === 'newFolder') {
+          request = host.post('filesMkdir', { path: snapshot.files.path, name: String(dialog.value).trim() })
+        } else if (dialog.kind === 'rename') {
+          request = host.post('filesRename', { path: dialog.path, name: String(dialog.value).trim() })
+        } else if (dialog.kind === 'trash') {
+          request = host.post('filesTrash', { paths: Array.isArray(dialog.paths) ? dialog.paths : [] })
+        } else {
+          publishFiles({ busy: null })
+          return Promise.resolve(false)
+        }
+        return request.then((value) => {
+          publishFiles({ busy: null, dialog: null })
+          if (dialog.kind === 'trash') {
+            const trashed = value !== null && typeof value === 'object' && Array.isArray(value.trashed) ? value.trashed.length : 0
+            filesShowToast('files.toast.trashed', { count: trashed })
+          } else if (dialog.kind === 'rename') {
+            filesShowToast('files.toast.renamed')
+          } else {
+            filesShowToast('files.toast.created')
+          }
+          void listFiles(snapshot.files.path, { traverse: false })
+          return true
+        }).catch((error) => {
+          publishFiles({ busy: null, actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Compress the selected paths into a zip next to the first item.
+       *
+       * @param {string[]} paths - selected paths.
+       * @returns {Promise<boolean>} whether the zip was written.
+       */
+      function filesCompress(paths) {
+        const list = Array.isArray(paths) ? paths.filter((entry) => typeof entry === 'string' && entry !== '') : []
+        if (list.length === 0) return Promise.resolve(false)
+        publishFiles({ busy: 'compress', actionError: null })
+        return host.post('filesCompress', { paths: list }).then((value) => {
+          publishFiles({ busy: null })
+          const path = value !== null && typeof value === 'object' && typeof value.path === 'string' ? value.path : ''
+          filesShowToast('files.toast.compressed', { path })
+          void listFiles(snapshot.files.path, { traverse: false })
+          return true
+        }).catch((error) => {
+          publishFiles({ busy: null, actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Queue the selected files for the phone-transfer outbox.
+       *
+       * @param {string[]} paths - selected paths.
+       * @returns {Promise<boolean>} whether they were queued.
+       */
+      function filesSend(paths) {
+        const list = Array.isArray(paths) ? paths.filter((entry) => typeof entry === 'string' && entry !== '') : []
+        if (list.length === 0) return Promise.resolve(false)
+        publishFiles({ busy: 'send', actionError: null })
+        return host.post('filesSend', { paths: list }).then((value) => {
+          const count = value !== null && typeof value === 'object' && Number.isFinite(value.count) ? value.count : list.length
+          publishFiles({ busy: null })
+          filesShowToast('files.toast.sent', { count })
+          return true
+        }).catch((error) => {
+          publishFiles({ busy: null, actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Read one browser File as base64 (the wire shape `filesDrop` accepts).
+       *
+       * @param {File} file - a dropped file.
+       * @returns {Promise<string>} base64 bytes without the data-URL prefix.
+       */
+      function readDroppedFile(file) {
+        return new Promise((resolve, reject) => {
+          if (typeof FileReader !== 'function') {
+            reject(new Error('FileReader is unavailable'))
+            return
+          }
+          const reader = new FileReader()
+          reader.onerror = () => reject(new Error('could not read the dropped file'))
+          reader.onload = () => {
+            const result = typeof reader.result === 'string' ? reader.result : ''
+            const comma = result.indexOf(',')
+            resolve(comma >= 0 ? result.slice(comma + 1) : result)
+          }
+          reader.readAsDataURL(file)
+        })
+      }
+
+      /**
+       * Import files dropped from Finder into the current folder.
+       *
+       * @param {File[]} fileList - the dropped files.
+       * @returns {Promise<boolean>} whether they were imported.
+       */
+      function filesDropFiles(fileList) {
+        const list = Array.isArray(fileList) ? fileList : []
+        const directory = snapshot.files.path
+        if (list.length === 0 || directory === '') return Promise.resolve(false)
+        publishFiles({ upload: { active: true, done: 0, total: list.length }, actionError: null, dropActive: false })
+        const reads = list.map((file) => readDroppedFile(file)
+          .then((dataBase64) => ({ name: file.name, dataBase64 }))
+          .catch(() => null))
+        return Promise.all(reads).then((items) => {
+          const valid = items.filter((item) => item !== null)
+          if (valid.length === 0) {
+            publishFiles({ upload: { active: false, done: 0, total: 0 } })
+            filesShowToast('files.toast.dropped', { count: 0 }, 'error')
+            return false
+          }
+          return host.post('filesDrop', { directory, files: valid }).then((value) => {
+            const saved = value !== null && typeof value === 'object' && Array.isArray(value.saved) ? value.saved.length : 0
+            publishFiles({ upload: { active: false, done: valid.length, total: valid.length } })
+            filesShowToast('files.toast.dropped', { count: saved })
+            void listFiles(directory, { traverse: false })
+            return true
+          })
+        }).catch((error) => {
+          publishFiles({ upload: { active: false, done: 0, total: 0 }, actionError: describeFailure(error) })
+          return false
+        })
+      }
+
+      /**
+       * Track whether a drag is hovering the Files list.
+       *
+       * @param {boolean} active - whether files are being dragged over it.
+       * @returns {void}
+       */
+      function filesSetDropActive(active) {
+        if (snapshot.files.dropActive === (active === true)) return
+        publishFiles({ dropActive: active === true })
+      }
+
+      /** @returns {void} */
+      function dismissFilesToast() {
+        if (snapshot.files.toast === null) return
+        publishFiles({ toast: null })
+      }
+
+      /** @returns {void} */
+      function dismissFilesError() {
+        publishFiles({ actionError: null })
+      }
+
       return {
         /** @returns {object} the current snapshot. */
         getSnapshot: () => snapshot,
@@ -4971,6 +6901,7 @@ window.__ModuleLoader__.load({
         refreshMonitor,
         setMonitorInterval,
         setMonitorPaused,
+        setMonitorSub,
         toggleMonitorProcesses,
         setMonitorProcessSort,
         loadMonitorProcesses,
@@ -4978,6 +6909,13 @@ window.__ModuleLoader__.load({
         cancelProcessKill,
         killMonitorProcess,
         dismissMonitorProcessError,
+        loadMonitorEnergy,
+        setMonitorEnergyRange,
+        setMonitorEnergyField,
+        applyMonitorEnergyCustom,
+        setMonitorEnergyGroupBy,
+        setMonitorEnergyPriceDraft,
+        saveMonitorEnergyPrice,
         fanInstall,
         fanUninstall,
         fanApply,
@@ -5004,6 +6942,37 @@ window.__ModuleLoader__.load({
         clearTransferOutbox,
         dismissTransferToast,
         transferInboxImageUrl,
+        loadFilesPlaces,
+        listFiles,
+        filesGoBack,
+        filesGoForward,
+        filesUp,
+        filesRefresh,
+        filesSetSort,
+        filesSetOrder,
+        filesSetView,
+        filesImageUrl,
+        filesToggleHidden,
+        filesSetQuery,
+        filesSelect,
+        filesClearSelection,
+        filesPreview,
+        filesPreviewImageFailed,
+        filesActivate,
+        filesOpenPath,
+        filesReveal,
+        filesCopyPath,
+        filesCopyName,
+        filesOpenDialog,
+        filesSetDialogValue,
+        filesCloseDialog,
+        filesConfirmDialog,
+        filesCompress,
+        filesSend,
+        filesDropFiles,
+        filesSetDropActive,
+        dismissFilesToast,
+        dismissFilesError,
       }
     }
 
@@ -6992,7 +8961,7 @@ window.__ModuleLoader__.load({
      * @param {object} props - series, optional fixed domain, height and label.
      * @returns {object} the `<svg>` element.
      */
-    function MonitorSparkline({ series, fixedMin, fixedMax, tall, ariaLabel }) {
+    function MonitorSparkline({ series, fixedMin, fixedMax, tall, ariaLabel, timeline }) {
       const groups = Array.isArray(series) ? series : []
       const bounds = monitorSeriesBounds(groups.map((group) => group.points), fixedMin, fixedMax)
       const width = 240
@@ -7021,7 +8990,7 @@ window.__ModuleLoader__.load({
         return nodes
       })
       const labelled = typeof ariaLabel === 'string' && ariaLabel !== ''
-      return h('svg', {
+      const chart = h('svg', {
         className: tall === true ? 'dshMacToolsMonitorSparkline dshMacToolsMonitorSparklineTall' : 'dshMacToolsMonitorSparkline',
         viewBox: `0 0 ${width} ${height}`,
         preserveAspectRatio: 'none',
@@ -7030,6 +8999,74 @@ window.__ModuleLoader__.load({
         'aria-hidden': labelled ? undefined : true,
         focusable: false,
       }, paths)
+      // Every chart carries a timeline: the history ring's start / middle / end
+      // clocks, so a sparkline can be read as "when", not just "what".
+      const ticks = monitorTimelineTicks(timeline)
+      if (ticks.length === 0) return chart
+      return h('div', { className: 'dshMacToolsMonitorChart' }, [
+        chart,
+        h('div', { key: 'timeline', className: 'dshMacToolsMonitorTimeline' }, ticks.map((text, index) => h('span', { key: index }, text))),
+      ])
+    }
+
+    /**
+     * One power-relationship scatter. Dots are paired history samples; the
+     * dashed line is a least-squares fit, so a correlation stays readable even
+     * when the points are noisy.
+     *
+     * @param {object} props - translator, paired points, colour, label and units.
+     * @returns {object} the chart card element.
+     */
+    function MonitorScatter({ t, points, color, ariaLabel, xUnit, yUnit, timeText }) {
+      const width = 240
+      const height = 92
+      const geometry = monitorScatterGeometry(points, width, height)
+      const grid = [0.25, 0.5, 0.75].map((fraction) => h('line', {
+        key: `grid-${fraction}`,
+        className: 'dshMacToolsMonitorScatterGrid',
+        x1: 0,
+        x2: width,
+        y1: (height * fraction).toFixed(2),
+        y2: (height * fraction).toFixed(2),
+      }))
+      const dots = geometry.dots.map((dot, index) => h('circle', {
+        key: `dot-${index}`,
+        className: 'dshMacToolsMonitorScatterDot',
+        cx: dot.cx.toFixed(2),
+        cy: dot.cy.toFixed(2),
+        r: 1.9,
+        style: { fill: color },
+      }))
+      const trend = geometry.trend === ''
+        ? null
+        : h('path', {
+          key: 'trend',
+          className: 'dshMacToolsMonitorScatterTrend',
+          d: geometry.trend,
+          style: { stroke: color },
+        })
+      return h('div', { className: 'dshMacToolsMonitorPowerChart' }, [
+        h('p', { key: 'title', className: 'dshMacToolsMonitorPowerChartTitle' }, ariaLabel),
+        h('svg', {
+          key: 'svg',
+          className: 'dshMacToolsMonitorScatter',
+          viewBox: `0 0 ${width} ${height}`,
+          role: 'img',
+          'aria-label': ariaLabel,
+          focusable: false,
+        }, [...grid, trend, ...dots]),
+        h('p', { key: 'range', className: 'dshMacToolsMonitorScatterRange' }, t('monitor.power.scatter.range', {
+          xMin: monitorAxisNumber(geometry.xMin),
+          xMax: monitorAxisNumber(geometry.xMax),
+          xUnit,
+          yMin: monitorAxisNumber(geometry.yMin),
+          yMax: monitorAxisNumber(geometry.yMax),
+          yUnit,
+        })),
+        typeof timeText === 'string' && timeText !== ''
+          ? h('p', { key: 'time', className: 'dshMacToolsMonitorScatterRange' }, t('monitor.power.scatter.timeRange', { range: timeText }))
+          : null,
+      ])
     }
 
     /**
@@ -7182,6 +9219,272 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    /**
+     * 功耗与散热 — power vs temperature / fan correlations. Every value here is
+     * derived from the paired history rings, so the readouts and charts degrade
+     * to "—" / a hint until enough samples exist.
+     *
+     * @param {object} props - translator, sample and history.
+     * @returns {object} the section element.
+     */
+    function MonitorPowerSection({ t, sample, history }) {
+      const block = sample.power !== null && typeof sample.power === 'object' ? sample.power : {}
+      const available = block.available === true
+      const head = h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+        h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.power.section.title')),
+        available
+          ? h('span', { key: 'meta', className: 'dshMacToolsMonitorSectionMeta' }, t('monitor.power.section.meta'))
+          : null,
+      ])
+      if (!available) {
+        return h('section', {
+          className: 'dshMacToolsMonitorSection',
+          'aria-label': t('monitor.power.section.title'),
+        }, [
+          head,
+          h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, h('p', {
+            key: 'hint',
+            className: 'dshMacToolsMonitorMuted',
+          }, t('monitor.power.unavailable'))),
+        ])
+      }
+      const cpuTemperature = Number.isFinite(sample.cpu?.temperatureCelsius) ? sample.cpu.temperatureCelsius : null
+      const ambient = Number.isFinite(sample.sensors?.groups?.ambient) ? sample.sensors.groups.ambient : null
+      const cpuW = Number.isFinite(block.cpuW) ? block.cpuW : null
+      const socW = Number.isFinite(block.socW) ? block.socW : null
+      const fanRpm = Number.isFinite(sample.fans?.items?.[0]?.actualRpm) ? sample.fans.items[0].actualRpm : null
+      // Junction-to-ambient resistance only makes sense against the board
+      // ambient sensor, not the room; show "—" when either side is missing.
+      const resistance = cpuTemperature !== null && ambient !== null && cpuW !== null && cpuW > 0
+        ? (cpuTemperature - ambient) / cpuW
+        : null
+      const rpmPerWatt = fanRpm !== null && socW !== null && socW > 0 ? fanRpm / socW : null
+      const powerRing = Array.isArray(history.power) ? history.power : []
+      const tempRing = Array.isArray(history.cpuTemperature) ? history.cpuTemperature : []
+      const fanRing = Array.isArray(history.fanRpm) ? history.fanRpm : []
+      const tempPairs = monitorHistoryPairs(powerRing, tempRing)
+      const fanPairs = monitorHistoryPairs(powerRing, fanRing)
+      const powerTimeText = monitorTimelineRange(powerRing)
+      const readouts = h('ul', { key: 'readouts', className: 'dshMacToolsMonitorPowerReadouts' }, [
+        h('li', { key: 'resistance', className: 'dshMacToolsMonitorPowerReadout' }, [
+          h('span', { key: 'label', className: 'dshMacToolsMonitorPowerReadoutLabel' }, t('monitor.power.resistance')),
+          h('span', {
+            key: 'value',
+            className: 'dshMacToolsMonitorPowerReadoutValue',
+          }, resistance === null ? '—' : t('monitor.power.resistanceValue', { value: resistance.toFixed(1) })),
+        ]),
+        h('li', { key: 'efficiency', className: 'dshMacToolsMonitorPowerReadout' }, [
+          h('span', { key: 'label', className: 'dshMacToolsMonitorPowerReadoutLabel' }, t('monitor.power.efficiency')),
+          h('span', {
+            key: 'value',
+            className: 'dshMacToolsMonitorPowerReadoutValue',
+          }, rpmPerWatt === null ? '—' : t('monitor.power.efficiencyValue', { value: Math.round(rpmPerWatt) })),
+        ]),
+      ])
+      const charts = tempPairs.length < 2 && fanPairs.length < 2
+        ? h('p', { key: 'empty', className: 'dshMacToolsMonitorMuted' }, t('monitor.power.scatter.empty'))
+        : h('div', { key: 'charts', className: 'dshMacToolsMonitorPowerCharts' }, [
+          tempPairs.length < 2 ? null : h(MonitorScatter, {
+            key: 'temperature',
+            t,
+            points: tempPairs,
+            color: MONITOR_SERIES_COLORS.powerTemperature,
+            ariaLabel: t('monitor.power.scatter.temperature'),
+            xUnit: 'W',
+            yUnit: '°C',
+            timeText: powerTimeText,
+          }),
+          fanPairs.length < 2 ? null : h(MonitorScatter, {
+            key: 'fan',
+            t,
+            points: fanPairs,
+            color: MONITOR_SERIES_COLORS.powerFan,
+            ariaLabel: t('monitor.power.scatter.fan'),
+            xUnit: 'W',
+            yUnit: 'RPM',
+            timeText: powerTimeText,
+          }),
+        ])
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.power.section.title'),
+      }, [
+        head,
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [readouts, charts]),
+      ])
+    }
+
+    /**
+     * 能耗统计 — the persisted daily energy ledger: a range selector (today /
+     * 7 days / 30 days / custom), the range total in 度 (kWh), today's and the
+     * all-time totals from the snapshot, and one bar per day.
+     *
+     * @param {object} props - translator, store, sample, the energy sub-slice and the snapshot's energy block.
+     * @returns {object} the section element.
+     */
+    function MonitorEnergySection({ t, store, sample, energy, summary }) {
+      const block = summary !== null && typeof summary === 'object' ? summary : {}
+      const powerAvailable = sample.power !== null && typeof sample.power === 'object' && sample.power.available === true
+      const range = MONITOR_ENERGY_RANGES.indexOf(energy.range) >= 0 ? energy.range : 'today'
+      const groupBy = MONITOR_ENERGY_GROUPS.indexOf(energy.groupBy) >= 0 ? energy.groupBy : 'auto'
+      const value = energy.value
+      const days = value !== null && Array.isArray(value.days) ? value.days : []
+      const totalWh = value !== null && Number.isFinite(value.totalWh) ? value.totalWh : 0
+      const todayWh = Number.isFinite(block.todayWh) ? block.todayWh : 0
+      const allTimeWh = Number.isFinite(block.totalWh) ? block.totalWh : 0
+      const price = Number.isFinite(block.pricePerKwh) ? block.pricePerKwh : MONITOR_ENERGY_DEFAULT_PRICE
+      const totalCost = value !== null && Number.isFinite(value.totalCost) ? value.totalCost : (totalWh / 1000) * price
+      const rangeSegments = h('div', { className: 'dshMacToolsMonitorSegmented' }, MONITOR_ENERGY_RANGES.map((id) => h('button', {
+        key: id,
+        type: 'button',
+        className: range === id
+          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
+          : 'dshMacToolsMonitorSegment',
+        'aria-pressed': range === id,
+        onClick: () => store.setMonitorEnergyRange(id),
+      }, t(MONITOR_ENERGY_RANGE_KEYS[id]))))
+      const groupSegments = h('div', { className: 'dshMacToolsMonitorSegmented' }, MONITOR_ENERGY_GROUPS.map((id) => h('button', {
+        key: id,
+        type: 'button',
+        className: groupBy === id
+          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
+          : 'dshMacToolsMonitorSegment',
+        'aria-pressed': groupBy === id,
+        onClick: () => store.setMonitorEnergyGroupBy(id),
+      }, t(MONITOR_ENERGY_GROUP_KEYS[id]))))
+      const customFields = range === 'custom'
+        ? h('div', { key: 'custom', className: 'dshMacToolsMonitorEnergyCustom' }, [
+          h('label', { key: 'from-label', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.from')),
+          h('input', {
+            key: 'from',
+            type: 'date',
+            className: 'dshMacToolsTextInput dshMacToolsMonitorEnergyDate',
+            value: typeof energy.from === 'string' ? energy.from : '',
+            'aria-label': t('monitor.energy.from'),
+            onChange: (event) => store.setMonitorEnergyField('from', event.target.value),
+          }),
+          h('span', { key: 'sep', className: 'dshMacToolsMonitorMuted' }, '→'),
+          h('input', {
+            key: 'to',
+            type: 'date',
+            className: 'dshMacToolsTextInput dshMacToolsMonitorEnergyDate',
+            value: typeof energy.to === 'string' ? energy.to : '',
+            'aria-label': t('monitor.energy.to'),
+            onChange: (event) => store.setMonitorEnergyField('to', event.target.value),
+          }),
+          h('button', {
+            key: 'apply',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => { void store.applyMonitorEnergyCustom() },
+          }, t('monitor.energy.apply')),
+        ])
+        : null
+      const priceDraft = typeof energy.priceDraft === 'string' && energy.priceDraft !== '' ? energy.priceDraft : String(price)
+      const priceRow = h('div', { key: 'price', className: 'dshMacToolsMonitorEnergyPrice' }, [
+        h('label', { key: 'label', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.priceLabel')),
+        h('input', {
+          key: 'input',
+          type: 'number',
+          min: '0',
+          max: '100',
+          step: '0.01',
+          className: 'dshMacToolsTextInput dshMacToolsMonitorEnergyPriceInput',
+          value: priceDraft,
+          'aria-label': t('monitor.energy.priceLabel'),
+          onChange: (event) => store.setMonitorEnergyPriceDraft(event.target.value),
+        }),
+        h('span', { key: 'unit', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.priceUnit')),
+        h('button', {
+          key: 'save',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+          disabled: energy.priceSaving === true,
+          onClick: () => { void store.saveMonitorEnergyPrice() },
+        }, energy.priceSaving === true ? t('monitor.energy.priceSaving') : t('monitor.energy.priceSave')),
+        energy.priceError !== null && energy.priceError !== undefined
+          ? h('span', { key: 'error', className: 'dshMacToolsMonitorWarning' }, energy.priceError.code === 'invalid_price'
+            ? t('monitor.energy.invalidPrice')
+            : monitorErrorText(t, energy.priceError))
+          : null,
+      ])
+      const effectiveGroup = monitorEnergyGroupFor(days.length, groupBy)
+      const buckets = monitorEnergyBuckets(days, effectiveGroup)
+      const geometry = monitorEnergyBarGeometry(buckets, 240, 64)
+      // The timeline carries the bucket dates, not just the two ends.
+      const axisTicks = buckets.length === 0
+        ? []
+        : [...new Set([
+          buckets[0].start,
+          buckets[Math.floor((buckets.length - 1) / 2)].start,
+          buckets[buckets.length - 1].end,
+        ])]
+      const chart = buckets.length === 0
+        ? null
+        : h('div', { key: 'chart', className: 'dshMacToolsMonitorEnergyChart' }, [
+          h('svg', {
+            key: 'svg',
+            className: 'dshMacToolsMonitorEnergyBars',
+            viewBox: '0 0 240 64',
+            role: 'img',
+            'aria-label': t('monitor.energy.chartAria'),
+            focusable: false,
+          }, geometry.bars.map((bar, index) => {
+            const bucket = buckets[index]
+            const span = bucket.start === bucket.end ? bucket.start : `${bucket.start} ~ ${bucket.end}`
+            const cost = (bar.wh / 1000) * price
+            return h('rect', {
+              key: `bar-${index}`,
+              className: 'dshMacToolsMonitorEnergyBar',
+              x: bar.x.toFixed(2),
+              y: bar.y.toFixed(2),
+              width: bar.w.toFixed(2),
+              height: bar.h.toFixed(2),
+              rx: 1.2,
+            }, h('title', { key: 'tip' }, `${span} · ${monitorKwhText(bar.wh)} ${t('monitor.energy.unit')} · ¥${monitorMoneyText(cost)}`))
+          })),
+          h('div', { key: 'axis', className: 'dshMacToolsMonitorEnergyAxis' }, axisTicks.map((text, index) => h('span', { key: index }, text))),
+        ])
+      let statusLine = null
+      if (energy.status === 'loading' && value === null) {
+        statusLine = h('p', { key: 'loading', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.loading'))
+      } else if (energy.error !== null && energy.error !== undefined) {
+        statusLine = h('p', { key: 'error', className: 'dshMacToolsMonitorWarning' }, energy.error.code === 'invalid_range'
+          ? t('monitor.energy.invalidRange')
+          : monitorErrorText(t, energy.error))
+      } else if (powerAvailable !== true && allTimeWh === 0) {
+        statusLine = h('p', { key: 'unavailable', className: 'dshMacToolsMonitorMuted' }, t('monitor.power.unavailable'))
+      } else if (value !== null && totalWh === 0) {
+        statusLine = h('p', { key: 'empty', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.empty'))
+      }
+      return h('section', {
+        className: 'dshMacToolsMonitorSection',
+        'aria-label': t('monitor.energy.title'),
+      }, [
+        h('div', { key: 'head', className: 'dshMacToolsMonitorSectionHead' }, [
+          h('h2', { key: 'title', className: 'dshMacToolsMonitorSectionTitle' }, t('monitor.energy.title')),
+          h('div', { key: 'segments', className: 'dshMacToolsMonitorSectionActions' }, [rangeSegments, groupSegments]),
+        ]),
+        h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [
+          customFields,
+          priceRow,
+          h('div', { key: 'big', className: 'dshMacToolsMonitorBig' }, [
+            h('p', { key: 'value', className: 'dshMacToolsMonitorBigValue' }, monitorKwhText(totalWh)),
+            h('span', { key: 'unit', className: 'dshMacToolsMonitorBigUnit' }, t('monitor.energy.unit')),
+          ]),
+          h('p', { key: 'totals', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.totals', {
+            today: monitorKwhText(todayWh),
+            total: monitorKwhText(allTimeWh),
+          })),
+          h('p', { key: 'cost', className: 'dshMacToolsMonitorMuted' }, t('monitor.energy.cost', {
+            cost: monitorMoneyText(totalCost),
+            price: price.toFixed(2),
+          })),
+          statusLine,
+          chart,
+        ]),
+      ])
+    }
 
     /**
      * 系统信息 — the surviving standalone System-tab content, merged into the
@@ -7514,6 +9817,149 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 风扇 — the overview's compact fan control: live RPM, a slider that writes
+     * a manual target on release, and the two quick actions (auto / full speed).
+     * The mode switch, curve editor and presets stay on the 风扇 sub-page; when
+     * control is not installed the card links there instead of duplicating the
+     * install flow.
+     *
+     * @param {object} props - store, translator, fan control status, action state and the sample's fans block.
+     * @returns {object|null} the card, or null when the Mac has no fan.
+     */
+    function MonitorFanQuickCard({ store, t, fanControl, fanState, fans }) {
+      const items = fans !== null && typeof fans === 'object' && Array.isArray(fans.items) ? fans.items : []
+      const first = items.length > 0 && items[0] !== null && typeof items[0] === 'object' ? items[0] : null
+      if (first === null) return null
+      const ready = fanControl !== null && typeof fanControl === 'object' && fanControl.state === 'ready'
+      const installed = fanControl !== null && typeof fanControl === 'object' && fanControl.installed === true
+      const pending = fanState !== null && typeof fanState === 'object' ? fanState.pending : null
+      const error = fanState !== null && typeof fanState === 'object' ? fanState.error : null
+      const minRpm = fanControl !== null && Number.isFinite(fanControl.minRpm) ? fanControl.minRpm : 1000
+      const maxRpm = fanControl !== null && Number.isFinite(fanControl.maxRpm) && fanControl.maxRpm > minRpm
+        ? fanControl.maxRpm
+        : minRpm + 3000
+      const actualRpm = Number.isFinite(first.actualRpm) ? first.actualRpm : null
+      const mode = fanControl !== null && typeof fanControl.mode === 'string' ? fanControl.mode : 'auto'
+      const [draftRpm, setDraftRpm] = React.useState(null)
+      const draftRef = React.useRef(null)
+      const commitTimer = React.useRef(null)
+      const manualSignature = ready && Number.isFinite(fanControl.manualRpm) ? `${fanControl.mode}:${fanControl.manualRpm}` : ''
+      React.useEffect(() => {
+        if (ready !== true || !Number.isFinite(fanControl.manualRpm)) return
+        const next = clampNumber(fanControl.manualRpm, minRpm, maxRpm)
+        setDraftRpm(next)
+        draftRef.current = next
+      }, [manualSignature])
+      React.useEffect(() => () => {
+        if (commitTimer.current !== null) clearTimeout(commitTimer.current)
+      }, [])
+      const scheduleManual = (rpm) => {
+        if (commitTimer.current !== null) clearTimeout(commitTimer.current)
+        commitTimer.current = setTimeout(() => {
+          commitTimer.current = null
+          void store.fanApply({ mode: 'manual', rpm: Math.round(clampNumber(rpm, minRpm, maxRpm)) })
+        }, MONITOR_FAN_DEBOUNCE_MS)
+      }
+      const sliderValue = draftRpm !== null
+        ? draftRpm
+        : (ready && Number.isFinite(fanControl.manualRpm) ? clampNumber(fanControl.manualRpm, minRpm, maxRpm) : minRpm)
+      const modeText = monitorFanModeLabel(t, mode)
+      const head = h('div', { key: 'head', className: 'dshMacToolsMonitorCardHead' }, [
+        h('h2', { key: 'title', className: 'dshMacToolsMonitorCardTitle' }, t('monitor.fan.title')),
+        h('div', { key: 'meta', className: 'dshMacToolsMonitorCardMeta' }, ready ? modeText : t('monitor.fan.notInstalledTitle')),
+      ])
+      const rpmRow = h('div', { key: 'big', className: 'dshMacToolsMonitorBig' }, [
+        h('p', { key: 'value', className: 'dshMacToolsMonitorBigValue' }, Number.isFinite(actualRpm) ? String(Math.round(actualRpm)) : '—'),
+        h('span', { key: 'unit', className: 'dshMacToolsMonitorBigUnit' }, t('monitor.fan.quick.rpm')),
+      ])
+      if (ready !== true) {
+        return h('section', { className: 'dshMacToolsCard' }, [
+          head,
+          h('div', { key: 'body', className: 'dshMacToolsCardBody' }, [
+            rpmRow,
+            h('p', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, installed
+              ? t('monitor.fan.reason.daemon-unreachable')
+              : t('monitor.fan.notInstalledTitle')),
+            h('div', { key: 'actions', className: 'dshMacToolsMonitorFanBar' }, h('button', {
+              key: 'open',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => store.setMonitorSub('fan'),
+            }, t('monitor.fan.quick.open'))),
+          ]),
+        ])
+      }
+      const commit = () => scheduleManual(draftRef.current === null ? sliderValue : draftRef.current)
+      return h('section', { className: 'dshMacToolsCard' }, [
+        head,
+        h('div', { key: 'body', className: 'dshMacToolsCardBody' }, [
+          rpmRow,
+          h('div', { key: 'slider', className: 'dshMacToolsMonitorSliderRow' }, [
+            h('input', {
+              key: 'range',
+              type: 'range',
+              className: 'dshMacToolsMonitorSlider',
+              min: minRpm,
+              max: maxRpm,
+              step: 10,
+              value: Math.round(sliderValue),
+              'aria-label': t('monitor.fan.manual'),
+              disabled: pending !== null,
+              onChange: (event) => {
+                const next = Number(event.target.value)
+                if (!Number.isFinite(next)) return
+                setDraftRpm(next)
+                draftRef.current = next
+              },
+              onPointerUp: commit,
+              onKeyUp: commit,
+              onBlur: commit,
+            }),
+            h('span', { key: 'value', className: 'dshMacToolsMonitorSliderValue' }, monitorRpmText(sliderValue)),
+          ]),
+          h('div', { key: 'actions', className: 'dshMacToolsMonitorFanQuickActions' }, [
+            h('button', {
+              key: 'auto',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+              disabled: pending !== null,
+              onClick: () => {
+                // 自动 = the temperature curve. The Host reports the active (or
+                // default) curve, so the compact card can apply it without a
+                // trip to the fan sub-page; a Mac without a curve opens it.
+                const curve = fanControl !== null && fanControl.curve !== null && typeof fanControl.curve === 'object'
+                  ? fanControl.curve
+                  : null
+                const points = curve !== null && Array.isArray(curve.points)
+                  ? curve.points.map((point) => ({ celsius: point.celsius, rpm: Math.round(point.rpm) }))
+                  : []
+                if (points.length < 2) {
+                  store.setMonitorSub('fan')
+                  return
+                }
+                void store.fanApply({
+                  mode: 'curve',
+                  sensor: typeof curve.sensor === 'string' ? curve.sensor : 'cpuPerformance',
+                  points,
+                })
+              },
+            }, t('monitor.fan.mode.auto')),
+            h('button', {
+              key: 'full',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonOutline',
+              disabled: pending !== null,
+              onClick: () => { void store.fanApply({ mode: 'manual', rpm: maxRpm }) },
+            }, t('monitor.fan.quick.full')),
+          ]),
+          error !== null && error !== undefined
+            ? h('p', { key: 'error', className: 'dshMacToolsMonitorWarning' }, monitorFanErrorText(t, error))
+            : null,
+        ]),
+      ])
+    }
+
+    /**
      * 风扇控制. Renders the install CTA / status card / ready-state controls
      * (per-fan readings, auto/manual/curve modes, manual slider committed on
      * release, the curve editor, presets and uninstall), exactly per §5.
@@ -7652,16 +10098,14 @@ window.__ModuleLoader__.load({
       }
       const applyMode = (mode) => {
         if (ready !== true || pending !== null) return
-        if (mode === 'auto') {
-          void store.fanApply({ mode: 'auto' })
-          return
-        }
         const draft = curveRef.current !== null ? curveRef.current : effectiveCurve
         if (mode === 'manual') {
           const rpm = Math.round(Number(manualRef.current === null ? effectiveManual : manualRef.current))
           void store.fanApply({ mode: 'manual', rpm: clampNumber(Number.isFinite(rpm) ? rpm : effectiveManual, minRpm, maxRpm) })
           return
         }
+        // 自动 is the temperature curve — never the SMC's own auto, which only
+        // 恢复系统自动 restores.
         void store.fanApply({
           mode: 'curve',
           sensor: draft.sensor,
@@ -7768,16 +10212,22 @@ window.__ModuleLoader__.load({
           })),
         ])
 
-      const modeButtons = ['auto', 'manual', 'curve'].map((mode) => h('button', {
-        key: mode,
-        type: 'button',
-        className: fanControl !== null && fanControl.mode === mode
-          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
-          : 'dshMacToolsMonitorSegment',
-        'aria-pressed': fanControl !== null && fanControl.mode === mode,
-        disabled: ready !== true || pending !== null,
-        onClick: () => applyMode(mode),
-      }, monitorFanModeLabel(t, mode)))
+      // 自动 drives the temperature curve; the SMC's own auto control is the
+      // 恢复系统自动 action, so it is not a third mode button.
+      const modeButtons = ['auto', 'manual'].map((mode) => {
+        const hostMode = mode === 'auto' ? 'curve' : mode
+        const active = fanControl !== null && fanControl.mode === hostMode
+        return h('button', {
+          key: mode,
+          type: 'button',
+          className: active
+            ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
+            : 'dshMacToolsMonitorSegment',
+          'aria-pressed': active,
+          disabled: ready !== true || pending !== null,
+          onClick: () => applyMode(mode),
+        }, monitorFanModeLabel(t, hostMode))
+      })
 
       const fanRows = fanItems.map((fan, index) => {
         const fanIndex = Number.isFinite(fan.index) ? fan.index : index
@@ -8045,7 +10495,8 @@ window.__ModuleLoader__.load({
     function MonitorProcessSection({ store, snapshot, t }) {
       const processes = snapshot.monitor.processes
       const open = processes.open === true
-      const sort = processes.sort === 'memory' ? 'memory' : 'cpu'
+      const sort = MONITOR_PROCESS_SORTS.indexOf(processes.sort) >= 0 ? processes.sort : 'cpu'
+      const order = processes.order === 'asc' ? 'asc' : 'desc'
       const armedPid = processes.armedPid
       const killingPid = processes.killingPid
       const actionError = processes.actionError
@@ -8080,26 +10531,17 @@ window.__ModuleLoader__.load({
         }, [head])
       }
 
-      const sortButtons = ['cpu', 'memory'].map((id) => h('button', {
-        key: id,
-        type: 'button',
-        className: sort === id
-          ? 'dshMacToolsMonitorSegment dshMacToolsMonitorSegmentActive'
-          : 'dshMacToolsMonitorSegment',
-        'aria-pressed': sort === id,
-        onClick: () => store.setMonitorProcessSort(id),
-      }, t(`monitor.processes.sort.${id}`)))
-
-      const sortRow = h('div', { key: 'sort', className: 'dshMacToolsMonitorProcessSort' }, [
-        h('div', {
-          key: 'seg',
-          className: 'dshMacToolsMonitorSegmented',
-          role: 'group',
-          'aria-label': t('monitor.processes.sortAria'),
-        }, sortButtons),
-        h('span', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.processes.hint', {
-          sort: t(`monitor.processes.sort.${sort}`),
-        })),
+      // Every column header is the sort control: clicking the active column
+      // reverses the direction, clicking another starts in its natural one.
+      const sortColumns = [
+        { key: 'name', labelKey: 'monitor.processes.name', numeric: false, modifier: '' },
+        { key: 'pid', labelKey: 'monitor.processes.pid', numeric: true, modifier: 'dshMacToolsMonitorProcessValuePid' },
+        { key: 'cpu', labelKey: 'monitor.processes.cpu', numeric: true, modifier: '' },
+        { key: 'memory', labelKey: 'monitor.processes.memory', numeric: true, modifier: '' },
+        { key: 'rss', labelKey: 'monitor.processes.rss', numeric: true, modifier: 'dshMacToolsMonitorProcessValueRss' },
+      ]
+      const hintRow = h('div', { key: 'sort', className: 'dshMacToolsMonitorProcessSort' }, [
+        h('span', { key: 'hint', className: 'dshMacToolsMonitorMuted' }, t('monitor.processes.hint')),
         processes.status === 'loading' && value === null
           ? h('span', { key: 'spinner', className: 'dshMacToolsSpinner', 'aria-hidden': true })
           : null,
@@ -8108,17 +10550,30 @@ window.__ModuleLoader__.load({
       const headerRow = h('li', {
         key: 'columns',
         className: 'dshMacToolsMonitorProcessRow dshMacToolsMonitorProcessRowHead',
-        'aria-hidden': true,
-      }, [
-        h('span', { key: 'name' }, t('monitor.processes.name')),
-        h('span', { key: 'cpu', className: 'dshMacToolsMonitorProcessValue' }, t('monitor.processes.cpu')),
-        h('span', { key: 'memory', className: 'dshMacToolsMonitorProcessValue' }, t('monitor.processes.memory')),
-        h('span', {
-          key: 'rss',
-          className: 'dshMacToolsMonitorProcessValue dshMacToolsMonitorProcessValueRss',
-        }, t('monitor.processes.rss')),
-        h('span', { key: 'actions' }),
-      ])
+      }, sortColumns.map((column) => {
+        const active = sort === column.key
+        const classes = ['dshMacToolsMonitorProcessSortButton']
+        if (column.numeric === true) classes.push('dshMacToolsMonitorProcessSortButtonEnd')
+        if (active) classes.push('dshMacToolsMonitorProcessSortButtonActive')
+        if (column.modifier !== '') classes.push(column.modifier)
+        return h('button', {
+          key: column.key,
+          type: 'button',
+          className: classes.join(' '),
+          'aria-pressed': active,
+          title: t('monitor.processes.sortHint'),
+          onClick: () => store.setMonitorProcessSort(column.key),
+        }, [
+          h('span', { key: 'label' }, t(column.labelKey)),
+          active
+            ? h('span', {
+              key: 'arrow',
+              className: 'dshMacToolsMonitorProcessSortArrow',
+              'aria-hidden': true,
+            }, order === 'asc' ? '↑' : '↓')
+            : null,
+        ])
+      }).concat([h('span', { key: 'actions' })]))
 
       const rowNodes = rows.map((row, index) => {
         const pid = Number.isFinite(row.pid) ? row.pid : null
@@ -8162,11 +10617,11 @@ window.__ModuleLoader__.load({
         }, [
           h('span', { key: 'name', className: 'dshMacToolsMonitorProcessName' }, [
             h('span', { key: 'label', className: 'dshMacToolsMonitorProcessLabel', title: name }, name),
-            h('span', {
-              key: 'pid',
-              className: 'dshMacToolsMonitorProcessPid',
-            }, pid === null ? '' : t('monitor.processes.pid', { pid })),
           ]),
+          h('span', {
+            key: 'pid',
+            className: 'dshMacToolsMonitorProcessValue dshMacToolsMonitorProcessValuePid',
+          }, pid === null ? '—' : String(pid)),
           h('span', { key: 'cpu', className: 'dshMacToolsMonitorProcessValue' }, `${formatPercent(cpuPercent)}%`),
           h('span', { key: 'memory', className: 'dshMacToolsMonitorProcessValue' }, `${formatPercent(memoryPercent)}%`),
           h('span', {
@@ -8233,7 +10688,7 @@ window.__ModuleLoader__.load({
       }, [
         head,
         h('div', { key: 'body', className: 'dshMacToolsMonitorSectionBody' }, [
-          sortRow,
+          hintRow,
           actionErrorNotice,
           value === null ? null : staleErrorNotice,
           listBody,
@@ -8491,6 +10946,7 @@ window.__ModuleLoader__.load({
       const monitor = snapshot.monitor
       const value = monitor.value
       const processes = monitor.processes
+      const energy = monitor.energy
       const intervalMs = MONITOR_INTERVALS.indexOf(monitor.intervalMs) >= 0 ? monitor.intervalMs : MONITOR_POLL_MS
       const paused = monitor.paused === true
       const capabilities = value !== null && typeof value === 'object'
@@ -8551,6 +11007,31 @@ window.__ModuleLoader__.load({
           if (controller !== null) controller.abort()
         }
       }, [active, paused, unsupported, processes.open, store])
+
+      // The ledger changes slowly, so the energy range is fetched on mount, on
+      // a range change and every 30 s — never on the 1 s snapshot cadence.
+      React.useEffect(() => {
+        if (active !== true || paused === true || unsupported === true) return undefined
+        let controller = null
+        let inFlight = false
+        const start = () => {
+          if (inFlight === true) return
+          inFlight = true
+          controller = typeof AbortController === 'function' ? new AbortController() : null
+          const signal = controller === null ? undefined : controller.signal
+          const settle = () => {
+            inFlight = false
+            controller = null
+          }
+          store.loadMonitorEnergy({ signal }).then(settle, settle)
+        }
+        start()
+        const timer = setInterval(start, MONITOR_ENERGY_POLL_MS)
+        return () => {
+          clearInterval(timer)
+          if (controller !== null) controller.abort()
+        }
+      }, [active, paused, unsupported, energy.range, energy.from, energy.to, store])
 
       // --- toolbar -------------------------------------------------------
       const sampledAt = value !== null && typeof value === 'object' && typeof value.sampledAt === 'string' && value.sampledAt !== ''
@@ -8709,11 +11190,13 @@ window.__ModuleLoader__.load({
           : h(MonitorSparkline, {
             key: 'temp-spark',
             series: [{ points: history.cpuTemperature, color: MONITOR_SERIES_COLORS.cpuTemperature, area: false }],
+            timeline: history.cpuTemperature,
             ariaLabel: t('monitor.cpu.temperature'),
           }),
         h(MonitorSparkline, {
           key: 'spark',
           series: [{ points: history.cpu, color: MONITOR_SERIES_COLORS.cpu, area: true }],
+          timeline: history.cpu,
           fixedMin: 0,
           fixedMax: 100,
           ariaLabel: t('monitor.cpu.title'),
@@ -8832,6 +11315,7 @@ window.__ModuleLoader__.load({
           ],
           fixedMin: 0,
           tall: true,
+          timeline: history.networkDown,
           ariaLabel: t('monitor.network.title'),
         }),
         h('ul', { key: 'legend', className: 'dshMacToolsMonitorLegend' }, [
@@ -8897,6 +11381,46 @@ window.__ModuleLoader__.load({
         ])
       }
 
+      const powerBlock = sample.power !== null && typeof sample.power === 'object' ? sample.power : {}
+      const powerAvailable = powerBlock.available === true
+      let powerCard = null
+      if (powerAvailable) {
+        const powerRow = (key, labelKey, value, color) => h('li', {
+          key,
+          className: 'dshMacToolsMonitorPowerRow',
+        }, [
+          h(MonitorLegendDot, { key: 'dot', color }),
+          h('span', { key: 'label' }, t(labelKey)),
+          h('span', { key: 'value', className: 'dshMacToolsMonitorPowerRowValue' }, monitorWattsText(value)),
+        ])
+        powerCard = h(MonitorCard, {
+          key: 'power',
+          title: t('monitor.power.title'),
+          meta: t('monitor.power.meta'),
+        }, [
+          h('div', { key: 'big', className: 'dshMacToolsMonitorBig' }, [
+            h('p', { key: 'value', className: 'dshMacToolsMonitorBigValue' }, monitorWattsText(powerBlock.socW)),
+            h('span', { key: 'unit', className: 'dshMacToolsMonitorBigUnit' }, t('monitor.power.unit')),
+          ]),
+          h(MonitorSparkline, {
+            key: 'spark',
+            series: [{ points: history.power, color: MONITOR_SERIES_COLORS.power, area: true }],
+            fixedMin: 0,
+            timeline: history.power,
+            ariaLabel: t('monitor.power.title'),
+          }),
+          h('ul', { key: 'breakdown', className: 'dshMacToolsMonitorPowerBreakdown' }, [
+            powerRow('cpu', 'monitor.power.cpu', powerBlock.cpuW, MONITOR_SERIES_COLORS.powerCpu),
+            powerRow('gpu', 'monitor.power.gpu', powerBlock.gpuW, MONITOR_SERIES_COLORS.powerGpu),
+            powerRow('dram', 'monitor.power.dram', powerBlock.dramW, MONITOR_SERIES_COLORS.powerDram),
+            powerRow('ane', 'monitor.power.ane', powerBlock.aneW, MONITOR_SERIES_COLORS.powerAne),
+          ]),
+          h('p', { key: 'energy', className: 'dshMacToolsMonitorMuted' }, t('monitor.power.energy', {
+            value: monitorEnergyText(powerBlock.energyWh),
+          })),
+        ])
+      }
+
       const footer = h('div', { key: 'footer', className: 'dshMacToolsMonitorFooter' }, [
         h('span', { key: 'uptime' }, t('monitor.footer.uptime', {
           duration: durationText(t, Number.isFinite(host.uptimeSeconds) ? host.uptimeSeconds : 0),
@@ -8915,8 +11439,24 @@ window.__ModuleLoader__.load({
           : null,
       ])
 
+      // The overview carries a compact fan control so the common "it is too
+      // loud / too warm" action does not require a trip to the 风扇 sub-page.
+      const fanQuickCard = h(MonitorFanQuickCard, {
+        key: 'fan-quick',
+        store,
+        t,
+        fanControl: value !== null && typeof value === 'object'
+          && value.fanControl !== null && typeof value.fanControl === 'object'
+          ? value.fanControl
+          : null,
+        fanState: monitor.fan,
+        fans: sample.fans !== null && typeof sample.fans === 'object' ? sample.fans : null,
+      })
+
       const overview = h('div', { key: 'overview', className: 'dshMacToolsMonitorOverview' }, [
         cpuCard,
+        powerCard,
+        fanQuickCard,
         memoryCard,
         diskCard,
         networkCard,
@@ -8937,15 +11477,52 @@ window.__ModuleLoader__.load({
           }, t('common.retry')),
         ])
 
+      // The page is split into sub-pages: a left rail switches them and only
+      // the selected one renders, so the tab no longer needs one long scroll.
+      const sub = MONITOR_SUBS.some((entry) => entry.id === monitor.sub) ? monitor.sub : 'overview'
+      const subnav = h('nav', {
+        key: 'subnav',
+        className: 'dshMacToolsMonitorSubnav',
+        'aria-label': t('monitor.subnav.aria'),
+      }, MONITOR_SUBS.map((entry) => h('button', {
+        key: entry.id,
+        type: 'button',
+        className: sub === entry.id
+          ? 'dshMacToolsMonitorSubnavItem dshMacToolsMonitorSubnavItemActive'
+          : 'dshMacToolsMonitorSubnavItem',
+        'aria-current': sub === entry.id ? 'page' : undefined,
+        onClick: () => store.setMonitorSub(entry.id),
+      }, t(entry.labelKey))))
+      let subPage = null
+      if (sub === 'sensors') {
+        subPage = h('div', { key: 'sensors', className: 'dshMacToolsMonitorSubbody' }, [
+          h(MonitorSensorsSection, { key: 'sensors', t, sensors: sample.sensors }),
+          h(MonitorPowerSection, { key: 'power', t, sample, history }),
+        ])
+      } else if (sub === 'energy') {
+        subPage = h('div', { key: 'energy', className: 'dshMacToolsMonitorSubbody' }, h(MonitorEnergySection, {
+          key: 'energy',
+          t,
+          store,
+          sample,
+          energy: monitor.energy,
+          summary: value !== null && typeof value === 'object' ? value.energy : null,
+        }))
+      } else if (sub === 'fan') {
+        subPage = h('div', { key: 'fan', className: 'dshMacToolsMonitorSubbody' }, h(MonitorFanSection, { key: 'fan', store, snapshot, t }))
+      } else if (sub === 'processes') {
+        subPage = h('div', { key: 'processes', className: 'dshMacToolsMonitorSubbody' }, h(MonitorProcessSection, { key: 'processes', store, snapshot, t }))
+      } else if (sub === 'alerts') {
+        subPage = h('div', { key: 'alerts', className: 'dshMacToolsMonitorSubbody' }, h(MonitorAlertsSection, { key: 'alerts', store, snapshot, t }))
+      } else if (sub === 'system') {
+        subPage = h('div', { key: 'system', className: 'dshMacToolsMonitorSubbody' }, h(MonitorSystemSection, { key: 'system', snapshot, t }))
+      } else {
+        subPage = h('div', { key: 'overview', className: 'dshMacToolsMonitorSubbody' }, overview)
+      }
       return h('div', { className: 'dshMacToolsMonitor' }, [
         toolbar,
         staleError,
-        overview,
-        h(MonitorSensorsSection, { key: 'sensors', t, sensors: sample.sensors }),
-        h(MonitorSystemSection, { key: 'system', snapshot, t }),
-        h(MonitorFanSection, { key: 'fan', store, snapshot, t }),
-        h(MonitorProcessSection, { key: 'processes', store, snapshot, t }),
-        h(MonitorAlertsSection, { key: 'alerts', store, snapshot, t }),
+        h('div', { key: 'layout', className: 'dshMacToolsMonitorLayout' }, [subnav, subPage]),
       ])
     }
 
@@ -9009,13 +11586,973 @@ window.__ModuleLoader__.load({
       ])
     }
 
+    // ---------------------------------------------------------------------
+    // Files tab
+    // ---------------------------------------------------------------------
+
+    /** Locale keys for the Files sort selector. */
+    const FILE_SORT_LABELS = {
+      name: 'files.sort.name',
+      size: 'files.sort.size',
+      mtime: 'files.sort.mtime',
+      kind: 'files.sort.kind',
+    }
+
+    /** Standard Files sidebar place id -> locale key. */
+    const FILE_PLACE_LABELS = {
+      home: 'files.place.home',
+      desktop: 'files.place.desktop',
+      documents: 'files.place.documents',
+      downloads: 'files.place.downloads',
+      pictures: 'files.place.pictures',
+      movies: 'files.place.movies',
+      music: 'files.place.music',
+      applications: 'files.place.applications',
+      custom: 'files.place.custom',
+    }
+
+    /** Extension groups behind one row's glyph and localized kind. */
+    const FILE_EXT_KINDS = {
+      image: FILES_IMAGE_EXTENSIONS,
+      pdf: ['pdf'],
+      archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'],
+      audio: ['mp3', 'wav', 'aac', 'flac', 'm4a', 'ogg', 'aiff', 'caf'],
+      video: ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm', 'wmv', 'flv'],
+      text: FILES_TEXT_EXTENSIONS,
+    }
+
+    /**
+     * Classify one entry for the preview pane and row glyph.
+     *
+     * @param {object|null} entry - a file-browser entry.
+     * @returns {string} 'directory' | 'image' | 'pdf' | 'archive' | 'audio' | 'video' | 'text' | 'other'.
+     */
+    function filesKindOf(entry) {
+      if (entry === null || typeof entry !== 'object') return 'other'
+      if (entry.kind === 'directory' || entry.directory === true) return 'directory'
+      const ext = typeof entry.ext === 'string' ? entry.ext.toLowerCase() : ''
+      const order = ['image', 'pdf', 'archive', 'audio', 'video', 'text']
+      for (let index = 0; index < order.length; index += 1) {
+        const kind = order[index]
+        if (FILE_EXT_KINDS[kind].indexOf(ext) >= 0) return kind
+      }
+      return 'other'
+    }
+
+    /**
+     * The localized row kind.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object|null} entry - a file-browser entry.
+     * @returns {string} the label.
+     */
+    function filesKindLabel(t, entry) {
+      if (entry !== null && typeof entry === 'object' && entry.kind === 'symlink' && entry.directory !== true) {
+        return t('files.kind.symlink')
+      }
+      return t(`files.kind.${filesKindOf(entry)}`)
+    }
+
+    /**
+     * The glyph used for one row.
+     *
+     * @param {object|null} entry - a file-browser entry.
+     * @returns {string} a {@link GLYPH_PARTS} name.
+     */
+    function filesGlyphName(entry) {
+      const kind = filesKindOf(entry)
+      if (kind === 'directory') return 'folderSolid'
+      if (kind === 'image') return 'image'
+      if (kind === 'archive') return 'archive'
+      if (kind === 'audio') return 'audio'
+      if (kind === 'video') return 'video'
+      if (kind === 'text' || kind === 'pdf') return 'document'
+      return 'file'
+    }
+
+    /**
+     * Render one colored entry glyph: folders are solid and amber, files are
+     * outlined and tinted by their kind, so the two reads differ at a glance.
+     *
+     * @param {object|null} entry - a file-browser entry.
+     * @param {number} size - edge length in CSS pixels.
+     * @returns {object} the wrapper element.
+     */
+    function filesIconElement(entry, size) {
+      return h('span', {
+        className: `dshMacToolsFilesGlyph dshMacToolsFilesIcon-${filesKindOf(entry)}`,
+        'aria-hidden': true,
+      }, glyph(filesGlyphName(entry), size, 'icon'))
+    }
+
+    /**
+     * The localized sidebar label for one place.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object} place - a places entry.
+     * @returns {string} the label.
+     */
+    function filesPlaceLabel(t, place) {
+      if (place === null || typeof place !== 'object') return ''
+      const key = FILE_PLACE_LABELS[place.id]
+      if (typeof key === 'string') return t(key)
+      if (typeof place.name === 'string' && place.name !== '') return place.name
+      return typeof place.path === 'string' ? place.path : ''
+    }
+
+    /**
+     * Localize one Files toast.
+     *
+     * @param {Function} t - the bound translator.
+     * @param {object|null} toast - the stored toast (`{ key, params }`).
+     * @returns {string} the text.
+     */
+    function filesToastText(t, toast) {
+      if (toast === null || toast === undefined) return ''
+      return t(toast.key, toast.params === undefined || toast.params === null ? {} : toast.params)
+    }
+
+    /**
+     * Format a file mtime for the list: a clock for today, a date otherwise.
+     *
+     * @param {number|string} value - epoch milliseconds or an ISO string.
+     * @returns {string} the short timestamp.
+     */
+    function filesTimeText(value) {
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return '—'
+      const now = new Date()
+      const sameDay = date.getFullYear() === now.getFullYear()
+        && date.getMonth() === now.getMonth()
+        && date.getDate() === now.getDate()
+      if (sameDay) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      if (date.getFullYear() === now.getFullYear()) return date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })
+      return date.toLocaleDateString()
+    }
+
+    /**
+     * The Files tab: a Finder-style browser with places, a sortable listing,
+     * a preview pane, inline dialogs for create/rename/trash, and drag-and-drop
+     * import from Finder. Everything reads through the Host route, so the tab
+     * shares the same authenticated data path as the rest of the panel.
+     *
+     * @param {object} props - tab props: the store, the snapshot, the translator and whether the tab is visible.
+     * @returns {object} the element.
+     */
+    function FilesTab({ store, snapshot, t, active }) {
+      const files = snapshot.files
+      const listing = files.listing
+      const preview = files.preview
+      const host = snapshot.host
+      const [menu, setMenu] = React.useState(null)
+      const listRef = React.useRef(null)
+
+      React.useEffect(() => {
+        if (active !== true) return
+        if (files.places.status === 'idle') void store.loadFilesPlaces()
+      }, [active, files.places.status, store])
+
+      React.useEffect(() => {
+        if (active !== true) return
+        if (files.path !== '' || files.places.status !== 'ready' || files.listing.status !== 'idle') return
+        if (files.places.startDirectory !== '') void store.listFiles(files.places.startDirectory, { reset: true })
+      }, [active, files.path, files.places.status, files.places.startDirectory, files.listing.status, store])
+
+      React.useEffect(() => {
+        if (files.toast === null) return undefined
+        const timer = setTimeout(() => store.dismissFilesToast(), 3600)
+        return () => clearTimeout(timer)
+      }, [files.toast, store])
+
+      React.useEffect(() => {
+        if (menu === null) return undefined
+        const close = () => setMenu(null)
+        document.addEventListener('mousedown', close)
+        document.addEventListener('scroll', close, true)
+        return () => {
+          document.removeEventListener('mousedown', close)
+          document.removeEventListener('scroll', close, true)
+        }
+      }, [menu])
+
+      const query = files.query.trim().toLowerCase()
+      const entries = listing.entries.filter((entry) => query === '' || String(entry.name).toLowerCase().indexOf(query) >= 0)
+      const selectionSet = new Set(files.selection)
+      const selectedEntries = listing.entries.filter((entry) => selectionSet.has(entry.path))
+      const selectedPaths = selectedEntries.map((entry) => entry.path)
+      const focusEntry = selectedEntries.length === 0 ? null : selectedEntries[selectedEntries.length - 1]
+      const capabilities = host.kind === 'ready' && host.value !== null && typeof host.value === 'object' ? host.value.capabilities : null
+      const unavailable = capabilities !== null && capabilities !== undefined && capabilities.files !== true
+      const writable = listing.writable === true
+
+      /**
+       * Render one entry's image thumbnail over its colored glyph, so a failed
+       * image load degrades to the icon instead of an empty tile.
+       *
+       * @param {object} entry - the entry.
+       * @param {number} size - icon edge length.
+       * @param {string} imgClass - class applied to the overlay `<img>`.
+       * @returns {object} the wrapper element.
+       */
+      const renderThumb = (entry, size, imgClass) => {
+        const ext = typeof entry.ext === 'string' ? entry.ext.toLowerCase() : ''
+        const icon = filesIconElement(entry, size)
+        if (FILES_IMAGE_EXTENSIONS.indexOf(ext) < 0) return icon
+        return h('span', {
+          key: 'thumb',
+          className: 'dshMacToolsFilesThumbWrap',
+          style: { width: `${size}px`, height: `${size}px` },
+        }, [
+          icon,
+          h('img', {
+            key: 'img',
+            className: imgClass,
+            src: store.filesImageUrl(entry),
+            alt: '',
+            loading: 'lazy',
+            onError: (event) => {
+              const node = event !== null && event !== undefined ? event.target : null
+              if (node !== null && node !== undefined && node.style !== undefined) node.style.display = 'none'
+            },
+          }),
+        ])
+      }
+
+      /**
+       * One layout-switch button (list / icons / gallery).
+       *
+       * @param {'list'|'icons'|'gallery'} viewId - the mode.
+       * @param {string} iconName - glyph name.
+       * @returns {object} the button.
+       */
+      const viewButton = (viewId, iconName) => h('button', {
+        key: viewId,
+        type: 'button',
+        className: files.view === viewId
+          ? 'dshMacToolsToolButton dshMacToolsToolButtonActive'
+          : 'dshMacToolsToolButton',
+        title: t(`files.view.${viewId}`),
+        'aria-label': t(`files.view.${viewId}`),
+        'aria-pressed': files.view === viewId,
+        onClick: () => store.filesSetView(viewId),
+      }, [glyph(iconName, 14, 'icon'), h('span', { key: 'label', className: 'dshMacToolsToolLabel' }, t(`files.view.${viewId}`))])
+
+      const focusList = () => {
+        const node = listRef.current
+        if (node !== null && node !== undefined && typeof node.focus === 'function') node.focus()
+      }
+
+      const select = (entry, event) => {
+        focusList()
+        if (event.metaKey || event.ctrlKey) store.filesSelect(entry.path, 'toggle', entries)
+        else if (event.shiftKey) store.filesSelect(entry.path, 'range', entries)
+        else store.filesSelect(entry.path, 'single', entries)
+        void store.filesPreview(entry)
+      }
+
+      const activate = (entry) => {
+        void store.filesActivate(entry)
+      }
+
+      const onListKeyDown = (event) => {
+        const index = focusEntry === null ? -1 : entries.findIndex((entry) => entry.path === focusEntry.path)
+        const move = (next) => {
+          if (next < 0 || next >= entries.length) return
+          event.preventDefault()
+          const entry = entries[next]
+          store.filesSelect(entry.path, 'single', entries)
+          void store.filesPreview(entry)
+        }
+        if (event.key === 'ArrowDown') { move(Math.min(entries.length - 1, index + 1)); return }
+        if (event.key === 'ArrowUp') {
+          if (event.metaKey || event.ctrlKey) {
+            event.preventDefault()
+            void store.filesUp()
+            return
+          }
+          move(Math.max(0, index < 0 ? 0 : index - 1))
+          return
+        }
+        if (event.key === 'Home') { move(0); return }
+        if (event.key === 'End') { move(entries.length - 1); return }
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          if (focusEntry !== null) activate(focusEntry)
+          else if (selectedEntries.length > 1) selectedEntries.forEach((entry) => activate(entry))
+          return
+        }
+        if (event.key === ' ') {
+          event.preventDefault()
+          if (focusEntry !== null) void store.filesPreview(focusEntry)
+          return
+        }
+        if (event.key === 'Backspace') {
+          event.preventDefault()
+          if ((event.metaKey || event.ctrlKey) && selectedPaths.length > 0) store.filesOpenDialog('trash', { paths: selectedPaths })
+          else void store.filesUp()
+          return
+        }
+        if (event.key === 'Escape') { store.filesClearSelection(); return }
+        if ((event.metaKey || event.ctrlKey) && (event.key === 'c' || event.key === 'C') && selectedPaths.length > 0) {
+          event.preventDefault()
+          void store.filesCopyPath(selectedPaths)
+        }
+      }
+
+      const placeButton = (place) => h('button', {
+        key: `place:${place.path}`,
+        type: 'button',
+        className: files.path === place.path ? 'dshMacToolsFilesPlace dshMacToolsFilesPlaceActive' : 'dshMacToolsFilesPlace',
+        title: typeof place.path === 'string' ? place.path : '',
+        onClick: () => { void store.listFiles(place.path) },
+      }, [
+        h('span', {
+          key: 'icon',
+          className: place.id === 'home' || place.id === 'applications'
+            ? 'dshMacToolsFilesPlaceIcon'
+            : 'dshMacToolsFilesPlaceIcon dshMacToolsFilesIcon-directory',
+        }, glyph(place.id === 'home' ? 'home' : place.id === 'applications' ? 'system' : 'folderSolid', 15, 'icon')),
+        h('span', { key: 'text', className: 'dshMacToolsFilesPlaceText' }, filesPlaceLabel(t, place)),
+      ])
+
+      const volumeButton = (volume) => h('button', {
+        key: `volume:${volume.path}`,
+        type: 'button',
+        className: files.path === volume.path ? 'dshMacToolsFilesPlace dshMacToolsFilesPlaceActive' : 'dshMacToolsFilesPlace',
+        title: typeof volume.path === 'string' ? volume.path : '',
+        onClick: () => { void store.listFiles(volume.path) },
+      }, [
+        h('span', { key: 'icon', className: 'dshMacToolsFilesPlaceIcon dshMacToolsFilesIcon-archive' }, glyph('archive', 15, 'icon')),
+        h('span', { key: 'text', className: 'dshMacToolsFilesPlaceText' }, typeof volume.name === 'string' ? volume.name : String(volume.path || '')),
+        Number.isFinite(volume.freeBytes)
+          ? h('span', { key: 'meta', className: 'dshMacToolsFilesPlaceMeta' }, t('files.free', { size: filesSizeText(volume.freeBytes) }))
+          : null,
+      ])
+
+      const recentButton = (recent) => h('button', {
+        key: `recent:${recent.path}`,
+        type: 'button',
+        className: 'dshMacToolsFilesPlace',
+        title: typeof recent.path === 'string' ? recent.path : '',
+        onClick: () => { void store.listFiles(recent.path) },
+      }, [
+        h('span', { key: 'icon', className: 'dshMacToolsFilesPlaceIcon' }, glyph('refresh', 15, 'icon')),
+        h('span', { key: 'text', className: 'dshMacToolsFilesPlaceText' }, typeof recent.name === 'string' ? recent.name : String(recent.path || '')),
+      ])
+
+      const sidebar = h('aside', { className: 'dshMacToolsFilesSidebar', 'aria-label': t('files.places') }, [
+        h('div', { key: 'places', className: 'dshMacToolsFilesSidebarSection' }, [
+          h('p', { key: 'title', className: 'dshMacToolsFilesSidebarTitle' }, t('files.places')),
+          ...files.places.favorites.map(placeButton),
+        ]),
+        h('div', { key: 'volumes', className: 'dshMacToolsFilesSidebarSection' }, [
+          h('p', { key: 'title', className: 'dshMacToolsFilesSidebarTitle' }, t('files.volumes')),
+          ...files.places.volumes.map(volumeButton),
+        ]),
+        h('div', { key: 'recent', className: 'dshMacToolsFilesSidebarSection' }, [
+          h('p', { key: 'title', className: 'dshMacToolsFilesSidebarTitle' }, t('files.recent')),
+          files.places.recents.length === 0
+            ? h('p', { key: 'empty', className: 'dshMacToolsFilesNotice' }, t('files.recentEmpty'))
+            : files.places.recents.map(recentButton),
+        ]),
+      ])
+
+      const iconButton = (name, labelKey, disabled, onClick) => h('button', {
+        key: name,
+        type: 'button',
+        className: 'dshMacToolsIconButton',
+        title: t(labelKey),
+        'aria-label': t(labelKey),
+        disabled: disabled === true,
+        onClick,
+      }, glyph(name, 14, 'icon'))
+
+      const crumbs = []
+      if (files.path !== '') {
+        crumbs.push(h('button', {
+          key: 'root',
+          type: 'button',
+          className: 'dshMacToolsFilesCrumb',
+          title: '/',
+          onClick: () => { void store.listFiles('/') },
+        }, '/'))
+        const parts = files.path.split('/').filter((part) => part !== '')
+        let accumulated = ''
+        parts.forEach((part, index) => {
+          accumulated += `/${part}`
+          const target = accumulated
+          crumbs.push(h('span', { key: `sep:${index}`, className: 'dshMacToolsFilesCrumbSep' }, '›'))
+          crumbs.push(h('button', {
+            key: `crumb:${target}`,
+            type: 'button',
+            className: index === parts.length - 1
+              ? 'dshMacToolsFilesCrumb dshMacToolsFilesCrumbCurrent'
+              : 'dshMacToolsFilesCrumb',
+            title: target,
+            onClick: () => { void store.listFiles(target) },
+          }, part))
+        })
+      }
+
+      const toolbar = h('div', { className: 'dshMacToolsFilesToolbar' }, [
+        h('div', { key: 'nav', className: 'dshMacToolsToolGroup' }, [
+          iconButton('arrowLeft', 'files.toolbar.back', files.back.length === 0, () => { void store.filesGoBack() }),
+          iconButton('arrowRight', 'files.toolbar.forward', files.forward.length === 0, () => { void store.filesGoForward() }),
+          iconButton('arrowUp', 'files.toolbar.up', listing.parent === null, () => { void store.filesUp() }),
+          iconButton('refresh', 'files.toolbar.refresh', files.path === '', () => { void store.filesRefresh() }),
+        ]),
+        h('div', {
+          key: 'views',
+          className: 'dshMacToolsToolGroup',
+          role: 'group',
+          'aria-label': t('files.view.aria'),
+        }, [
+          viewButton('list', 'listView'),
+          viewButton('icons', 'gridView'),
+          viewButton('gallery', 'galleryView'),
+        ]),
+        h('div', { key: 'crumbsep', className: 'dshMacToolsToolDivider', 'aria-hidden': true }),
+        h('div', { key: 'crumbs', className: 'dshMacToolsFilesCrumbs' }, crumbs),
+        h('input', {
+          key: 'search',
+          className: 'dshMacToolsInput dshMacToolsFilesSearch',
+          type: 'search',
+          value: files.query,
+          placeholder: t('files.toolbar.search'),
+          'aria-label': t('files.toolbar.search'),
+          spellCheck: false,
+          onChange: (event) => store.filesSetQuery(event.target.value),
+        }),
+        h('select', {
+          key: 'sort',
+          className: 'dshMacToolsFilesSelect',
+          value: files.sort,
+          title: t('files.toolbar.sort'),
+          'aria-label': t('files.toolbar.sort'),
+          onChange: (event) => { void store.filesSetSort(event.target.value) },
+        }, FILES_SORTS.map((sortId) => h('option', { key: sortId, value: sortId }, t(FILE_SORT_LABELS[sortId])))),
+        h('button', {
+          key: 'order',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact',
+          title: t(files.order === 'asc' ? 'files.order.asc' : 'files.order.desc'),
+          'aria-label': t(files.order === 'asc' ? 'files.order.asc' : 'files.order.desc'),
+          onClick: () => { void store.filesSetOrder(files.order === 'asc' ? 'desc' : 'asc') },
+        }, files.order === 'asc' ? '↑' : '↓'),
+        h('button', {
+          key: 'hidden',
+          type: 'button',
+          className: files.showHidden
+            ? 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsToggleOn'
+            : 'dshMacToolsButton dshMacToolsButtonCompact',
+          title: t(files.showHidden ? 'files.hideHidden' : 'files.showHidden'),
+          onClick: () => { void store.filesToggleHidden() },
+        }, t(files.showHidden ? 'files.hideHidden' : 'files.showHidden')),
+        h('button', {
+          key: 'newFolder',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact',
+          title: t('files.toolbar.newFolder'),
+          disabled: writable !== true || files.path === '',
+          onClick: () => store.filesOpenDialog('newFolder'),
+        }, [glyph('plus', 12, 'icon'), h('span', { key: 'label' }, t('files.toolbar.newFolder'))]),
+      ])
+
+      const actionButton = (labelKey, onClick, disabled) => h('button', {
+        key: labelKey,
+        type: 'button',
+        className: 'dshMacToolsButton dshMacToolsButtonCompact',
+        disabled: disabled === true,
+        onClick,
+      }, t(labelKey))
+
+      // The action row is always on screen so its actions are discoverable; the
+      // buttons only arm once something is selected.
+      const hasSelection = selectedPaths.length > 0
+      const singleSelection = selectedEntries.length === 1
+      const selectionBar = h('div', {
+        key: 'selection',
+        className: hasSelection
+          ? 'dshMacToolsFilesSelectionBar'
+          : 'dshMacToolsFilesSelectionBar dshMacToolsFilesSelectionBarIdle',
+        role: 'toolbar',
+        'aria-label': t('files.selection.aria'),
+      }, [
+        h('span', {
+          key: 'count',
+          className: 'dshMacToolsFilesSelectionCount',
+          'aria-live': 'polite',
+        }, hasSelection ? t('files.status.selected', { count: selectedPaths.length }) : t('files.status.none')),
+        h('div', { key: 'actions', className: 'dshMacToolsToolGroup dshMacToolsFilesToolbarSpacer' }, [
+          actionButton('files.action.open', () => {
+            if (!hasSelection) return
+            if (singleSelection) activate(selectedEntries[0])
+            else selectedEntries.forEach((entry) => { if (entry.kind === 'directory') activate(entry) })
+          }, !hasSelection),
+          actionButton('files.action.copyPath', () => { void store.filesCopyPath(selectedPaths) }, !hasSelection),
+          actionButton('files.action.reveal', () => { void store.filesReveal(selectedPaths[0]) }, !hasSelection),
+          actionButton('files.action.rename', () => {
+            if (!singleSelection) return
+            store.filesOpenDialog('rename', { path: selectedEntries[0].path, value: selectedEntries[0].name })
+          }, !singleSelection),
+          actionButton('files.action.compress', () => { void store.filesCompress(selectedPaths) }, !hasSelection),
+          actionButton('files.action.send', () => { void store.filesSend(selectedPaths) }, !hasSelection),
+          h('button', {
+            key: 'trash',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+            disabled: !hasSelection || writable !== true,
+            onClick: () => store.filesOpenDialog('trash', { paths: selectedPaths }),
+          }, t('files.action.trash')),
+        ]),
+      ])
+
+      const dialog = files.dialog
+      const dialogElement = dialog === null ? null : h('div', {
+        key: 'dialog',
+        className: 'dshMacToolsFilesDialog',
+        role: 'dialog',
+        'aria-modal': 'false',
+        'aria-label': t(`files.dialog.${dialog.kind}`),
+      }, [
+        h('p', { key: 'title', className: 'dshMacToolsFilesDialogTitle' }, t(`files.dialog.${dialog.kind}`)),
+        dialog.kind === 'trash'
+          ? h('p', { key: 'text', className: 'dshMacToolsFilesDialogText' }, [
+            t('files.dialog.trashMessage', { count: Array.isArray(dialog.paths) ? dialog.paths.length : 0 }),
+            ' ',
+            t('files.dialog.trashHint'),
+          ])
+          : null,
+        dialog.kind === 'trash' ? h('div', { key: 'trashActions', className: 'dshMacToolsFilesDialogRow' }, [
+          h('div', { key: 'actions', className: 'dshMacToolsFilesDialogActions' }, [
+            h('button', {
+              key: 'cancel',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => store.filesCloseDialog(),
+            }, t('files.dialog.cancel')),
+            h('button', {
+              key: 'confirm',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonDanger',
+              disabled: files.busy !== null,
+              onClick: () => { void store.filesConfirmDialog() },
+            }, t('files.dialog.trash')),
+          ]),
+        ]) : h('div', { key: 'row', className: 'dshMacToolsFilesDialogRow' }, [
+          h('input', {
+            key: 'name',
+            className: 'dshMacToolsInput dshMacToolsFilesSearch',
+            type: 'text',
+            value: dialog.value === undefined ? '' : String(dialog.value),
+            placeholder: t('files.dialog.name'),
+            'aria-label': t('files.dialog.name'),
+            autoFocus: true,
+            onChange: (event) => store.filesSetDialogValue(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void store.filesConfirmDialog()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                store.filesCloseDialog()
+              }
+            },
+          }),
+          h('div', { key: 'actions', className: 'dshMacToolsFilesDialogActions' }, [
+            h('button', {
+              key: 'cancel',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact',
+              onClick: () => store.filesCloseDialog(),
+            }, t('files.dialog.cancel')),
+            h('button', {
+              key: 'confirm',
+              type: 'button',
+              className: 'dshMacToolsButton dshMacToolsButtonCompact dshMacToolsButtonPrimary',
+              disabled: files.busy !== null || String(dialog.value === undefined ? '' : dialog.value).trim() === '',
+              onClick: () => { void store.filesConfirmDialog() },
+            }, t('files.dialog.confirm')),
+          ]),
+        ]),
+        dialog.kind !== 'trash' || files.busy === null ? null : h('p', { key: 'busy', className: 'dshMacToolsFilesDialogText' }, t('files.loading')),
+        files.actionError === null ? null : h('p', { key: 'error', className: 'dshMacToolsFilesDialogError' }, t('files.error.action', { message: files.actionError.message })),
+      ])
+
+      const actionErrorNotice = files.actionError === null || dialog !== null ? null : h('div', { key: 'actionError', className: 'dshMacToolsNotice dshMacToolsNoticeError' }, [
+        h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon' }, glyph('alert', 14, 'icon')),
+        h('p', { key: 'text' }, t('files.error.action', { message: files.actionError.message })),
+        h('button', {
+          key: 'dismiss',
+          type: 'button',
+          className: 'dshMacToolsButton dshMacToolsButtonCompact',
+          onClick: () => store.dismissFilesError(),
+        }, t('common.dismiss')),
+      ])
+
+      const notices = []
+      if (unavailable) notices.push(h('p', { key: 'unavailable', className: 'dshMacToolsFilesNotice dshMacToolsHintWarn' }, t('files.error.unavailable')))
+      if (listing.system === true) notices.push(h('p', { key: 'system', className: 'dshMacToolsFilesNotice' }, t('files.system')))
+      if (listing.status === 'ready' && !writable) notices.push(h('p', { key: 'readonly', className: 'dshMacToolsFilesNotice' }, t('files.notWritable')))
+      if (files.upload.active) {
+        notices.push(h('p', { key: 'upload', className: 'dshMacToolsFilesNotice' }, t('files.toast.uploading', { done: files.upload.done, total: files.upload.total })))
+      }
+
+      const listHead = h('div', { className: 'dshMacToolsFilesListHead' }, [
+        h('span', { key: 'name' }, t('files.column.name')),
+        h('span', { key: 'size', className: 'dshMacToolsFilesHeadRight' }, t('files.column.size')),
+        h('span', { key: 'mtime', className: 'dshMacToolsFilesHeadRight' }, t('files.column.mtime')),
+      ])
+
+      const rows = entries.map((entry) => {
+        const selected = selectionSet.has(entry.path)
+        return h('li', {
+          key: entry.path,
+          role: 'option',
+          'aria-selected': selected,
+          className: selected ? 'dshMacToolsFilesRow dshMacToolsFilesRowActive' : 'dshMacToolsFilesRow',
+          title: entry.path,
+          onClick: (event) => select(entry, event),
+          onDoubleClick: () => activate(entry),
+          onContextMenu: (event) => {
+            event.preventDefault()
+            if (!selectionSet.has(entry.path)) {
+              store.filesSelect(entry.path, 'single', entries)
+              void store.filesPreview(entry)
+            }
+            setMenu({ x: event.clientX, y: event.clientY, entry })
+          },
+        }, [
+          h('span', { key: 'name', className: 'dshMacToolsFilesRowName' }, [
+            filesIconElement(entry, 18),
+            h('span', { key: 'label', className: 'dshMacToolsFilesRowLabel' }, entry.name),
+          ]),
+          h('span', { key: 'size', className: 'dshMacToolsFilesRowMeta' }, entry.kind === 'directory' ? '—' : filesSizeText(entry.size)),
+          h('span', { key: 'mtime', className: 'dshMacToolsFilesRowMeta' }, filesTimeText(entry.mtime)),
+        ])
+      })
+
+      const tiles = entries.map((entry) => {
+        const selected = selectionSet.has(entry.path)
+        return h('li', {
+          key: entry.path,
+          role: 'option',
+          'aria-selected': selected,
+          className: selected ? 'dshMacToolsFilesTile dshMacToolsFilesTileActive' : 'dshMacToolsFilesTile',
+          title: entry.path,
+          onClick: (event) => select(entry, event),
+          onDoubleClick: () => activate(entry),
+          onContextMenu: (event) => {
+            event.preventDefault()
+            if (!selectionSet.has(entry.path)) {
+              store.filesSelect(entry.path, 'single', entries)
+              void store.filesPreview(entry)
+            }
+            setMenu({ x: event.clientX, y: event.clientY, entry })
+          },
+        }, [
+          h('span', { key: 'ico', className: 'dshMacToolsFilesTileIcon' }, renderThumb(entry, 44, 'dshMacToolsFilesTileImg')),
+          h('span', { key: 'name', className: 'dshMacToolsFilesTileName' }, entry.name),
+          h('span', { key: 'meta', className: 'dshMacToolsFilesTileMeta' }, entry.kind === 'directory' ? t('files.kind.directory') : filesSizeText(entry.size)),
+        ])
+      })
+
+      let statusContent = null
+      if (unavailable) {
+        statusContent = h('p', { className: 'dshMacToolsFilesLoading' }, t('files.error.unavailable'))
+      } else if (listing.status === 'loading' && listing.entries.length === 0) {
+        statusContent = h('p', { className: 'dshMacToolsFilesLoading' }, t('files.loading'))
+      } else if (listing.status === 'error') {
+        statusContent = h('div', { className: 'dshMacToolsNotice dshMacToolsNoticeError' }, [
+          h('span', { key: 'icon', className: 'dshMacToolsNoticeIcon' }, glyph('alert', 14, 'icon')),
+          h('p', { key: 'text' }, t('files.error.action', { message: listing.error === null ? '' : listing.error.message })),
+          h('button', {
+            key: 'retry',
+            type: 'button',
+            className: 'dshMacToolsButton dshMacToolsButtonCompact',
+            onClick: () => { void store.filesRefresh() },
+          }, t('common.retry')),
+        ])
+      } else if (files.places.status === 'loading' && files.path === '') {
+        statusContent = h('p', { className: 'dshMacToolsFilesLoading' }, t('files.loading'))
+      } else if (entries.length === 0) {
+        statusContent = h('div', { className: 'dshMacToolsFilesEmptyList' }, query !== '' ? t('files.searchEmpty') : t('files.empty'))
+      }
+
+      const metaRow = (labelKey, value, mono) => h('div', { key: `${labelKey}:${value}`, className: 'dshMacToolsFilesMetaRow' }, [
+        h('span', { key: 'label', className: 'dshMacToolsFilesMetaLabel' }, t(labelKey)),
+        h('span', {
+          key: 'value',
+          className: mono === true ? 'dshMacToolsFilesMetaValue dshMacToolsFilesMetaValueMono' : 'dshMacToolsFilesMetaValue',
+        }, String(value)),
+      ])
+
+      let previewBody
+      if (preview.status === 'loading') {
+        previewBody = h('p', { className: 'dshMacToolsFilesLoading' }, t('files.loading'))
+      } else if (preview.entry === null) {
+        previewBody = h('p', { className: 'dshMacToolsFilesPreviewEmpty' }, t('files.preview.empty'))
+      } else if (preview.status === 'error') {
+        previewBody = h('p', { className: 'dshMacToolsFilesNotice dshMacToolsHintWarn' }, t('files.error.read', { message: preview.error === null ? '' : preview.error.message }))
+      } else if (preview.kind === 'image' || preview.kind === 'thumb') {
+        previewBody = h('div', null, [
+          h('img', {
+            key: 'image',
+            className: 'dshMacToolsFilesPreviewImage',
+            src: preview.url,
+            alt: preview.entry.name,
+            onError: () => store.filesPreviewImageFailed(),
+          }),
+          preview.kind === 'thumb'
+            ? h('p', { key: 'note', className: 'dshMacToolsFilesNotice' }, t('files.preview.unsupported'))
+            : null,
+        ])
+      } else if (preview.kind === 'text') {
+        previewBody = h('div', null, [
+          h('pre', { key: 'text', className: 'dshMacToolsFilesPreviewText' }, preview.text === null ? '' : preview.text),
+          preview.truncated
+            ? h('p', { key: 'truncated', className: 'dshMacToolsFilesNotice' }, t('files.preview.truncated', { size: filesSizeText(Number.isFinite(preview.bytes) ? preview.bytes : 0) }))
+            : null,
+        ])
+      } else if (preview.kind === 'directory') {
+        previewBody = h('p', { className: 'dshMacToolsFilesNotice' }, t('files.preview.directory'))
+      } else {
+        previewBody = h('p', { className: 'dshMacToolsFilesNotice' }, t('files.preview.unsupported'))
+      }
+
+      const metaRows = preview.entry === null ? null : [
+        metaRow('files.preview.path', preview.entry.path, true),
+        metaRow('files.preview.size', preview.entry.kind === 'directory' ? '—' : filesSizeText(preview.entry.size)),
+        metaRow('files.preview.kind', filesKindLabel(t, preview.entry)),
+        metaRow('files.preview.modified', preview.entry.mtime === undefined ? '—' : formatDateTime(preview.entry.mtime)),
+      ]
+
+      const previewElement = h('aside', { key: 'preview', className: 'dshMacToolsFilesPreview', 'aria-label': t('files.preview.title') }, [
+        h('p', { key: 'head', className: 'dshMacToolsFilesPreviewHead' }, [
+          glyph('image', 12, 'icon'),
+          h('span', { key: 'text' }, t('files.preview.title')),
+          preview.entry === null ? null : h('span', { key: 'kind', className: 'dshMacToolsFilesPreviewKind' }, filesKindLabel(t, preview.entry)),
+        ]),
+        preview.entry === null ? null : h('p', { key: 'title', className: 'dshMacToolsFilesPreviewTitle' }, preview.entry.name),
+        h('div', { key: 'body' }, previewBody),
+        metaRows === null ? null : h('div', { key: 'meta' }, metaRows),
+      ])
+
+      const galleryContent = (() => {
+        if (preview.entry === null) return h('p', { className: 'dshMacToolsFilesPreviewEmpty' }, t('files.preview.empty'))
+        if (preview.status === 'loading') return h('p', { className: 'dshMacToolsFilesLoading' }, t('files.loading'))
+        if (preview.status === 'error') return h('p', { className: 'dshMacToolsFilesNotice dshMacToolsHintWarn' }, t('files.error.read', { message: preview.error === null ? '' : preview.error.message }))
+        if (preview.kind === 'image' || preview.kind === 'thumb') {
+          return h('span', { key: 'bigthumb', className: 'dshMacToolsFilesGalleryImageWrap' }, [
+            h('span', { key: 'fallback', className: 'dshMacToolsFilesGalleryFallback' }, filesIconElement(preview.entry, 72)),
+            h('img', {
+              key: 'img',
+              className: 'dshMacToolsFilesGalleryImage',
+              src: preview.url,
+              alt: preview.entry.name,
+              onError: (event) => {
+                const node = event !== null && event !== undefined ? event.target : null
+                if (node !== null && node !== undefined && node.style !== undefined) node.style.display = 'none'
+              },
+            }),
+          ])
+        }
+        if (preview.kind === 'text') {
+          return h('pre', { key: 'text', className: 'dshMacToolsFilesPreviewText dshMacToolsFilesGalleryText' }, preview.text === null ? '' : preview.text)
+        }
+        return filesIconElement(preview.entry, 72)
+      })()
+
+      const galleryStage = h('div', { key: 'stage', className: 'dshMacToolsFilesGalleryStage' }, preview.entry === null ? galleryContent : [
+        h('div', { key: 'content', className: 'dshMacToolsFilesGalleryContent' }, galleryContent),
+        h('p', { key: 'title', className: 'dshMacToolsFilesGalleryTitle' }, preview.entry.name),
+        h('p', { key: 'meta', className: 'dshMacToolsFilesGalleryMeta' }, [
+          filesKindLabel(t, preview.entry),
+          ' · ',
+          preview.entry.kind === 'directory' ? '—' : filesSizeText(preview.entry.size),
+          ' · ',
+          preview.entry.mtime === undefined ? '—' : formatDateTime(preview.entry.mtime),
+        ]),
+      ])
+
+      const galleryStrip = entries.length === 0 ? null : h('ul', {
+        key: 'strip',
+        className: 'dshMacToolsFilesGalleryStrip',
+        role: 'listbox',
+        'aria-multiselectable': true,
+        tabIndex: 0,
+        ref: listRef,
+        onKeyDown: onListKeyDown,
+      }, entries.map((entry) => {
+        const selected = selectionSet.has(entry.path)
+        return h('li', {
+          key: entry.path,
+          role: 'option',
+          'aria-selected': selected,
+          className: selected ? 'dshMacToolsFilesStripItem dshMacToolsFilesStripItemActive' : 'dshMacToolsFilesStripItem',
+          title: entry.path,
+          onClick: (event) => select(entry, event),
+          onDoubleClick: () => activate(entry),
+          onContextMenu: (event) => {
+            event.preventDefault()
+            if (!selectionSet.has(entry.path)) {
+              store.filesSelect(entry.path, 'single', entries)
+              void store.filesPreview(entry)
+            }
+            setMenu({ x: event.clientX, y: event.clientY, entry })
+          },
+        }, [
+          renderThumb(entry, 30, 'dshMacToolsFilesStripImg'),
+          h('span', { key: 'name', className: 'dshMacToolsFilesStripName' }, entry.name),
+        ])
+      }))
+
+      const listRows = h('ul', {
+        className: 'dshMacToolsFilesList',
+        role: 'listbox',
+        'aria-multiselectable': true,
+        tabIndex: 0,
+        ref: listRef,
+        onKeyDown: onListKeyDown,
+      }, rows)
+
+      const iconGrid = h('ul', {
+        className: 'dshMacToolsFilesGrid',
+        role: 'listbox',
+        'aria-multiselectable': true,
+        tabIndex: 0,
+        ref: listRef,
+        onKeyDown: onListKeyDown,
+      }, tiles)
+
+      const galleryBody = h('div', { key: 'gallery', className: 'dshMacToolsFilesGallery' }, [galleryStage, galleryStrip])
+
+      const viewContent = statusContent !== null
+        ? statusContent
+        : files.view === 'icons'
+          ? iconGrid
+          : files.view === 'gallery'
+            ? galleryBody
+            : listRows
+
+      const listWrap = h('div', {
+        key: 'list',
+        className: files.view === 'gallery'
+          ? 'dshMacToolsFilesListWrap dshMacToolsFilesGalleryWrap'
+          : 'dshMacToolsFilesListWrap',
+      }, files.view === 'list' ? [listHead, viewContent] : [viewContent])
+
+      const body = h('div', {
+        key: 'body',
+        className: (files.dropActive
+          ? 'dshMacToolsFilesBody dshMacToolsFilesBodyDrop'
+          : 'dshMacToolsFilesBody') + (files.view === 'gallery' ? ' dshMacToolsFilesBodyGallery' : ''),
+        onDragOver: (event) => {
+          event.preventDefault()
+          store.filesSetDropActive(true)
+        },
+        onDragLeave: (event) => {
+          const related = event.relatedTarget
+          if (related !== null && related !== undefined && event.currentTarget !== null
+            && typeof event.currentTarget.contains === 'function' && event.currentTarget.contains(related)) return
+          store.filesSetDropActive(false)
+        },
+        onDrop: (event) => {
+          event.preventDefault()
+          store.filesSetDropActive(false)
+          const transfer = event.dataTransfer
+          const dropped = transfer !== null && transfer !== undefined ? Array.from(transfer.files || []) : []
+          void store.filesDropFiles(dropped)
+        },
+      }, files.view === 'gallery' ? [listWrap] : [listWrap, previewElement])
+
+      const menuItem = (labelKey, iconName, danger, onClick, disabled) => h('button', {
+        key: labelKey,
+        type: 'button',
+        role: 'menuitem',
+        className: danger === true
+          ? 'dshMacToolsFilesMenuItem dshMacToolsFilesMenuItemDanger'
+          : 'dshMacToolsFilesMenuItem',
+        disabled: disabled === true,
+        onClick: () => {
+          setMenu(null)
+          onClick()
+        },
+      }, [glyph(iconName, 13, 'icon'), h('span', { key: 'label' }, t(labelKey))])
+
+      const menuElement = menu === null ? null : h('div', {
+        key: 'menu',
+        className: 'dshMacToolsFilesMenu',
+        role: 'menu',
+        style: {
+          left: `${typeof window === 'undefined' ? menu.x : Math.min(menu.x, Math.max(8, window.innerWidth - 200))}px`,
+          top: `${typeof window === 'undefined' ? menu.y : Math.min(menu.y, Math.max(8, window.innerHeight - 280))}px`,
+        },
+        onMouseDown: (event) => event.stopPropagation(),
+      }, [
+        menuItem('files.action.open', 'open', false, () => { activate(menu.entry) }),
+        menuItem('files.action.reveal', 'reveal', false, () => { void store.filesReveal(menu.entry.path) }),
+        menuItem('files.action.copyPath', 'copy', false, () => { void store.filesCopyPath([menu.entry.path]) }),
+        menuItem('files.action.copyName', 'copy', false, () => { void store.filesCopyName([menu.entry.name]) }),
+        h('div', { key: 'sep1', className: 'dshMacToolsFilesMenuSep' }),
+        menuItem('files.toolbar.newFolder', 'plus', false, () => store.filesOpenDialog('newFolder'), !writable),
+        menuItem('files.action.rename', 'text', false, () => store.filesOpenDialog('rename', { path: menu.entry.path, value: menu.entry.name }), !writable),
+        menuItem('files.action.compress', 'archive', false, () => { void store.filesCompress([menu.entry.path]) }, !writable),
+        menuItem('files.action.send', 'qr', false, () => { void store.filesSend([menu.entry.path]) }),
+        h('div', { key: 'sep2', className: 'dshMacToolsFilesMenuSep' }),
+        menuItem('files.action.trash', 'trash', true, () => store.filesOpenDialog('trash', { paths: [menu.entry.path] }), !writable),
+      ])
+
+      const statusbar = h('div', { key: 'status', className: 'dshMacToolsFilesStatusbar' }, [
+        h('span', { key: 'items' }, t('files.status.items', { count: entries.length })),
+        listing.truncated
+          ? h('span', { key: 'truncated' }, t('files.truncated', { count: entries.length }))
+          : null,
+        Number.isFinite(listing.freeBytes)
+          ? h('span', { key: 'free' }, t('files.status.free', { size: filesSizeText(listing.freeBytes) }))
+          : null,
+        h('span', { key: 'hint', className: 'dshMacToolsFilesStatusSpacer' }, t('files.hint')),
+      ])
+
+      const toast = files.toast === null ? null : h('div', {
+        key: 'toast',
+        className: files.toast.kind === 'error'
+          ? 'dshMacToolsToast dshMacToolsToastError'
+          : 'dshMacToolsToast',
+        role: files.toast.kind === 'error' ? 'alert' : 'status',
+        'aria-live': 'polite',
+      }, [
+        h('span', { key: 'text', className: 'dshMacToolsToastText' }, filesToastText(t, files.toast)),
+        h('button', {
+          key: 'close',
+          type: 'button',
+          className: 'dshMacToolsIconButton',
+          'aria-label': t('common.close'),
+          title: t('common.close'),
+          onClick: () => store.dismissFilesToast(),
+        }, glyph('close', 13, 'icon')),
+      ])
+
+      const main = h('div', { key: 'main', className: 'dshMacToolsFilesMain' }, [
+        toolbar,
+        actionErrorNotice,
+        dialogElement,
+        ...notices,
+        selectionBar,
+        body,
+        statusbar,
+      ].filter((node) => node !== null && node !== undefined))
+
+      return h('div', { className: 'dshMacToolsFiles' }, [sidebar, main, toast, menuElement].filter((node) => node !== null))
+    }
+
     /**
      * The panel page, rendered by the `main` slot while this panel is active.
      *
-     * All four tabs stay mounted and inactive ones are hidden with the
-     * `hidden` attribute, so an in-progress annotation set, the calculator's
-     * expression and history, the live status snapshot and the transfer session
-     * all survive a tab switch. Only the visible tab polls: the live status
+     * All five tabs stay mounted and inactive ones are hidden with the
+     * `hidden` attribute, so an in-progress annotation set, the file browser's
+     * current folder, the calculator's expression and history, the live status
+     * snapshot and the transfer session all survive a tab switch. Only the visible tab polls: the live status
      * every 1 / 2 / 5 s and the phone-transfer session/lists every 2 s / 4 s.
      * The old System tab's still-unique facts are rendered inside the status
      * tab's 系统信息 section instead of being polled separately.
@@ -9089,6 +12626,7 @@ window.__ModuleLoader__.load({
         const active = activeTab === id
         let content
         if (id === 'screenshot') content = h(ScreenshotTab, { store, snapshot, t, active })
+        else if (id === 'files') content = h(FilesTab, { store, snapshot, t, active })
         else if (id === 'calculator') content = h(CalculatorTab, { store, snapshot, t })
         else if (id === 'monitor') content = h(MonitorTab, { store, snapshot, t, active })
         else content = h(TransferTab, { store, snapshot, t, active })

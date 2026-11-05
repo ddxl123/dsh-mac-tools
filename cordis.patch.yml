@@ -73,6 +73,19 @@
         transferMaxFileMB: 512
         # Copy text received from the phone to the macOS clipboard automatically.
         transferAutoCopyText: false
+        # Files tab (访达-style file browser): the directory it opens first.
+        # `~` is expanded. Empty means the home directory.
+        filesStartDirectory: ''
+        # Start with hidden (dot) files visible; the tab's toggle changes it at
+        # runtime for the current session.
+        filesShowHidden: false
+        # Extra directories pinned in the Files tab sidebar, e.g.
+        # ["~/projects", "~/Downloads"]. The standard places (home, Desktop,
+        # Documents, Downloads, Pictures, Movies, Music, Applications) are
+        # always listed. Reads are allowed anywhere the owning user can read;
+        # writes (create, rename, move to trash, compress, drop) stay inside
+        # the home directory and /Volumes.
+        filesFavorites: []
         # Status tab (运行状态 / Status, in the spirit of the App Store app
         # "State" plus Macs Fan Control): Host-side sampling cadence in
         # milliseconds (500–10000). Software metrics are collected at most

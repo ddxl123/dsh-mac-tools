@@ -153,6 +153,7 @@ function loadClient(options) {
     setInterval,
     clearInterval,
     fetch: settings.fetch,
+    ...(settings.FileReader === undefined ? {} : { FileReader: settings.FileReader }),
   }
   vm.runInNewContext(CLIENT_SOURCE, sandbox, { filename: CLIENT_PATH, displayErrors: true })
 
@@ -506,7 +507,7 @@ function monitorSnapshotValue(overrides) {
           memory: 57.2,
           wifi: 33.7,
           battery: null,
-          ambient: null,
+          ambient: 41.2,
         },
         readings: [
           { key: 'Tp01', celsius: 90.6 },
@@ -520,6 +521,16 @@ function monitorSnapshotValue(overrides) {
         reason: null,
         items: [{ index: 0, actualRpm: 2220, targetRpm: 2221, minRpm: 1000, maxRpm: 4900, mode: 'forced' }],
       },
+      power: {
+        available: true,
+        cpuW: 13.7,
+        gpuW: 3.6,
+        aneW: 0,
+        dramW: 2.5,
+        socW: 19.8,
+        energyWh: 0.0421,
+        since: '2026-10-23T11:00:00.000Z',
+      },
     },
     history: {
       capacity: 60,
@@ -528,6 +539,17 @@ function monitorSnapshotValue(overrides) {
       networkDown: [monitorHistoryPoint(0, 512), monitorHistoryPoint(1, 4096), monitorHistoryPoint(2, 8192)],
       networkUp: [monitorHistoryPoint(0, 0), monitorHistoryPoint(1, 1024), monitorHistoryPoint(2, 2048)],
       cpuTemperature: [monitorHistoryPoint(0, 73.2), monitorHistoryPoint(1, null), monitorHistoryPoint(2, 74.1)],
+      power: [monitorHistoryPoint(0, 18.4), monitorHistoryPoint(1, 19.1), monitorHistoryPoint(2, 19.8)],
+      fanRpm: [monitorHistoryPoint(0, 2100), monitorHistoryPoint(1, 2180), monitorHistoryPoint(2, 2220)],
+    },
+    energy: {
+      todayWh: 12.3,
+      totalWh: 456.7,
+      days: 42,
+      since: '2026-10-01',
+      pricePerKwh: 0.56,
+      costToday: 0.0069,
+      costTotal: 0.2558,
     },
     alerts: {
       settings: {
@@ -621,6 +643,40 @@ function monitorSensors(overrides) {
 }
 
 /**
+ * The monitor snapshot's power block with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the power block.
+ */
+function monitorPower(overrides) {
+  return Object.assign({}, monitorSnapshotValue().sample.power, overrides === undefined ? {} : overrides)
+}
+
+/**
+ * The energy range answer the panel renders (contract §3.9) with fields replaced.
+ *
+ * @param {object} [overrides] - fields to replace.
+ * @returns {object} the energy range value.
+ */
+function monitorEnergyRangeValue(overrides) {
+  return Object.assign({
+    from: '2026-10-30',
+    to: '2026-11-05',
+    days: [
+      { date: '2026-10-30', wh: 8100 },
+      { date: '2026-10-31', wh: 9400 },
+      { date: '2026-11-01', wh: 0 },
+      { date: '2026-11-02', wh: 12300 },
+    ],
+    totalWh: 29800,
+    averageWh: 7450,
+    pricePerKwh: 0.56,
+    totalCost: 16.688,
+    averageCost: 4.172,
+  }, overrides === undefined ? {} : overrides)
+}
+
+/**
  * The monitor snapshot's alerts block with fields replaced.
  *
  * @param {object} [overrides] - fields to replace.
@@ -702,6 +758,39 @@ function renderedStrings(element, depth = 0, found = []) {
     return found
   }
   for (const child of element.children) renderedStrings(child, depth, found)
+  return found
+}
+
+/**
+ * Invoke every function component in an element tree and collect the host
+ * elements that match a predicate, so a test can count rendered SVG bars.
+ *
+ * @param {any} element - an element returned by `React.createElement`.
+ * @param {(candidate: object) => boolean} predicate - the filter.
+ * @param {number} [depth] - recursion guard.
+ * @param {object[]} [found] - the accumulator.
+ * @returns {object[]} the matching elements.
+ */
+function renderedElements(element, predicate, depth = 0, found = []) {
+  if (depth > 60) throw new Error('element tree is deeper than the panel should be')
+  if (element === null || element === undefined) return found
+  if (typeof element === 'string' || typeof element === 'number') return found
+  if (Array.isArray(element)) {
+    for (const child of element) renderedElements(child, predicate, depth, found)
+    return found
+  }
+  if (typeof element.type === 'function') {
+    const props = {
+      ...element.props,
+      children: element.children.length === 0
+        ? undefined
+        : (element.children.length === 1 ? element.children[0] : element.children),
+    }
+    renderedElements(element.type(props), predicate, depth + 1, found)
+    return found
+  }
+  if (predicate(element)) found.push(element)
+  for (const child of element.children) renderedElements(child, predicate, depth, found)
   return found
 }
 
@@ -1772,7 +1861,7 @@ test('the panel renders every transfer state without throwing', () => {
   })
 })
 
-test('the four tabs are registered in the documented order without a System tab', () => {
+test('the five tabs are registered in the documented order without a System tab', () => {
   const { state } = applyClient()
   const store = injectedStore(state)
   const main = state.slots.find((slot) => slot.options.name === 'main')
@@ -1781,20 +1870,22 @@ test('the four tabs are registered in the documented order without a System tab'
   assert.deepEqual(
     tabs.map((element) => element.props.id),
     [
-      'dsh-mac-tools-tab-screenshot',
-      'dsh-mac-tools-tab-calculator',
       'dsh-mac-tools-tab-monitor',
+      'dsh-mac-tools-tab-screenshot',
+      'dsh-mac-tools-tab-files',
+      'dsh-mac-tools-tab-calculator',
       'dsh-mac-tools-tab-transfer',
     ],
-    'the System tab must be gone and the status tab must follow the calculator',
+    'the status tab leads the bar, the System tab must be gone, and the files browser follows the screenshot tab',
   )
   assert.deepEqual(
     tabs.map((element) => element.children[0]),
-    ['tab.screenshot', 'tab.calculator', 'tab.monitor', 'tab.transfer'],
+    ['tab.monitor', 'tab.screenshot', 'tab.files', 'tab.calculator', 'tab.transfer'],
     'every tab label must go through the locale service',
   )
   assert.equal(tabs.some((element) => element.props.id.endsWith('-system')), false)
-  assert.match(CLIENT_SOURCE, /const TABS = \['screenshot', 'calculator', 'monitor', 'transfer'\]/u)
+  assert.equal(store.getSnapshot().tab, 'monitor', 'the panel lands on the status tab')
+  assert.match(CLIENT_SOURCE, /const TABS = \['monitor', 'screenshot', 'files', 'calculator', 'transfer'\]/u)
 })
 
 test('the monitor dictionaries are complete in both languages', () => {
@@ -1852,7 +1943,7 @@ test('the monitor dictionaries are complete in both languages', () => {
     'monitor.fan.install.prompt',
     'monitor.fan.mode.auto',
     'monitor.fan.mode.manual',
-    'monitor.fan.mode.curve',
+    'monitor.fan.mode.system',
     'monitor.fan.manualHint',
     'monitor.fan.curve.sensor',
     'monitor.fan.curve.hint',
@@ -1868,8 +1959,8 @@ test('the monitor dictionaries are complete in both languages', () => {
     'monitor.fan.error.fan_not_ready',
     'monitor.fan.error.fan_apply_failed',
     'monitor.processes.title',
-    'monitor.processes.sort.cpu',
-    'monitor.processes.sort.memory',
+    'monitor.processes.pid',
+    'monitor.processes.sortHint',
     'monitor.processes.kill',
     'monitor.processes.killArmed',
     'monitor.processes.killProtected',
@@ -1947,6 +2038,40 @@ test('the monitor store polls, dedupes and degrades on failure', async () => {
   assert.equal(snapshot.monitor.status, 'ready')
   assert.equal(snapshot.monitor.value.sample.cpu.usagePercent, 18.2)
   assert.equal(snapshot.monitor.error.code, 'host_unreachable')
+})
+
+test('the energy store saves the price and patches the snapshot cost block', async () => {
+  const snapshotValue = monitorSnapshotValue()
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'energyPriceSave') {
+      return jsonResponse(Object.assign({}, snapshotValue.energy, { pricePerKwh: 0.56, costToday: 0.0069, costTotal: 0.2558 }))
+    }
+    if (body.endpoint === 'monitorEnergy') return jsonResponse(monitorEnergyRangeValue())
+    if (body.endpoint === 'monitor') return jsonResponse(snapshotValue)
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  assert.equal(await store.loadMonitor(), true)
+  store.setMonitorEnergyPriceDraft('0.56')
+  assert.equal(await store.saveMonitorEnergyPrice(), true)
+  const posted = recorder.calls.filter((call) => call.body.endpoint === 'energyPriceSave')
+  assert.equal(posted.length, 1, 'exactly one save request')
+  assert.deepEqual(posted[0].body.payload, { pricePerKwh: 0.56 })
+  const snapshot = store.getSnapshot()
+  assert.equal(snapshot.monitor.value.energy.pricePerKwh, 0.56, 'the returned block replaces the snapshot block')
+  assert.equal(snapshot.monitor.energy.priceDraft, '', 'the draft clears after a successful save')
+  assert.equal(snapshot.monitor.energy.priceSaving, false)
+  assert.equal(snapshot.monitor.energy.priceError, null)
+})
+
+test('the energy store refuses an out-of-range price without a request', async () => {
+  const recorder = hostRecorder((body) => (body.endpoint === 'monitor' ? jsonResponse(monitorSnapshotValue()) : jsonResponse({})))
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  await store.loadMonitor()
+  store.setMonitorEnergyPriceDraft('250')
+  assert.equal(await store.saveMonitorEnergyPrice(), false)
+  assert.equal(recorder.calls.filter((call) => call.body.endpoint === 'energyPriceSave').length, 0, 'no request for an invalid price')
+  assert.equal(store.getSnapshot().monitor.energy.priceError.code, 'invalid_price')
 })
 
 test('the monitor toolbar state only accepts offered intervals and toggles pause', () => {
@@ -2387,10 +2512,589 @@ test('the monitor tab renders every documented state without throwing', () => {
     status: 'ready',
     value: monitorSnapshotValue({ alerts: null }),
   }, 'a missing alerts block')
+
+  // A Host that predates the power block (or a Mac without IOReport) must
+  // still render: the card disappears and the section explains the gap.
+  renderWith({
+    status: 'ready',
+    value: monitorSnapshotValue({
+      sample: monitorSample({ power: null }),
+      history: monitorHistory({ power: undefined, fanRpm: undefined }),
+    }),
+  }, 'a sample without the power block')
+})
+
+test('the power card renders SoC wattage, the cluster breakdown and the session energy', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key, params) => (params === undefined ? key : `${key}(${Object.values(params).join('|')})`)
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  for (const expected of [
+    'monitor.power.title',
+    'monitor.power.unit',
+    'monitor.power.cpu',
+    'monitor.power.gpu',
+    'monitor.power.dram',
+    'monitor.power.ane',
+    '19.8 W',
+    '13.7 W',
+    '3.6 W',
+    '2.5 W',
+    '0.0 W',
+    'monitor.power.energy(0.042 Wh)',
+  ]) {
+    assert.ok(strings.includes(expected), `expected the power card to render ${expected}`)
+  }
+})
+
+test('the power section renders the correlation readouts and scatter charts', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: { ...base.monitor, sub: 'sensors', status: 'ready', value: monitorSnapshotValue() },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  for (const expected of [
+    'monitor.power.section.title',
+    'monitor.power.section.meta',
+    'monitor.power.resistance',
+    'monitor.power.efficiency',
+    'monitor.power.resistanceValue',
+    'monitor.power.efficiencyValue',
+    'monitor.power.scatter.temperature',
+    'monitor.power.scatter.fan',
+    'monitor.power.scatter.range',
+  ]) {
+    assert.ok(strings.includes(expected), `expected the power section to render ${expected}`)
+  }
+})
+
+test('the power section degrades to the unavailable hint without IOReport', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor, sub: 'sensors',
+      status: 'ready',
+      value: monitorSnapshotValue({
+        sample: monitorSample({
+          power: monitorPower({
+            available: false,
+            cpuW: null,
+            gpuW: null,
+            aneW: null,
+            dramW: null,
+            socW: null,
+            energyWh: 0,
+            since: null,
+          }),
+        }),
+      }),
+    },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  assert.ok(strings.includes('monitor.power.section.title'), 'the section title still renders')
+  assert.ok(strings.includes('monitor.power.unavailable'), 'the unavailable hint must explain the gap')
+  assert.equal(strings.includes('monitor.power.energy'), false, 'no power card without a reading')
+  assert.equal(strings.includes('monitor.power.scatter.range'), false, 'no charts without a reading')
+})
+
+test('the energy section renders the range total, the daily bars and the ledger totals', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key, params) => (params === undefined ? key : `${key}(${Object.values(params).join('|')})`)
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor, sub: 'energy',
+      status: 'ready',
+      value: monitorSnapshotValue(),
+      energy: {
+        range: '7d',
+        from: '',
+        to: '',
+        status: 'ready',
+        value: monitorEnergyRangeValue(),
+        error: null,
+        fetchedAt: 0,
+      },
+    },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  for (const expected of [
+    'monitor.energy.title',
+    'monitor.energy.range.7d',
+    'monitor.energy.unit',
+    '29.8',
+    'monitor.energy.totals(0.01|0.46)',
+  ]) {
+    assert.ok(strings.includes(expected), `expected the energy section to render ${expected}`)
+  }
+  assert.ok(strings.some((entry) => entry.startsWith('2026-10-30 · ')), 'the bar tooltip carries the date and kWh')
+})
+
+test('the energy section renders the custom date controls', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor, sub: 'energy',
+      status: 'ready',
+      value: monitorSnapshotValue(),
+      energy: {
+        range: 'custom',
+        from: '2026-10-01',
+        to: '2026-10-31',
+        status: 'ready',
+        value: monitorEnergyRangeValue(),
+        error: null,
+        fetchedAt: 0,
+      },
+    },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  for (const expected of ['monitor.energy.from', 'monitor.energy.apply']) {
+    assert.ok(strings.includes(expected), `expected the custom range control ${expected}`)
+  }
+})
+
+test('the energy section localizes an invalid custom range', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor, sub: 'energy',
+      status: 'ready',
+      value: monitorSnapshotValue(),
+      energy: {
+        range: 'custom',
+        from: '',
+        to: '',
+        status: 'error',
+        value: null,
+        error: { code: 'invalid_range', message: 'the custom range is incomplete', details: {} },
+        fetchedAt: 0,
+      },
+    },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  assert.ok(strings.includes('monitor.energy.invalidRange'), 'the invalid-range hint must be localized')
+})
+
+test('the energy section renders the price editor, the cost line and the grouping selector', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key, params) => (params === undefined ? key : `${key}(${Object.values(params).join('|')})`)
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor, sub: 'energy',
+      status: 'ready',
+      value: monitorSnapshotValue(),
+      energy: {
+        range: '7d',
+        from: '',
+        to: '',
+        groupBy: 'week',
+        status: 'ready',
+        value: monitorEnergyRangeValue(),
+        error: null,
+        fetchedAt: 0,
+        priceDraft: '',
+        priceSaving: false,
+        priceError: null,
+      },
+    },
+  })
+  const strings = renderedStrings(main.component({ store, t }))
+  for (const expected of [
+    'monitor.energy.priceLabel',
+    'monitor.energy.priceUnit',
+    'monitor.energy.priceSave',
+    'monitor.energy.cost(16.69|0.56)',
+    'monitor.energy.group.auto',
+    'monitor.energy.group.day',
+    'monitor.energy.group.week',
+    'monitor.energy.group.month',
+  ]) {
+    assert.ok(strings.includes(expected), `expected the energy controls to render ${expected}`)
+  }
+})
+
+test('the energy chart groups daily samples into Monday-based weeks', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const days = []
+  for (let index = 0; index < 14; index += 1) {
+    const date = new Date(2026, 9, 1 + index, 12)
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    days.push({ date: key, wh: 1000 })
+  }
+  const renderBars = (groupBy) => {
+    store.getSnapshot = () => ({
+      ...base,
+      monitor: {
+        ...base.monitor, sub: 'energy',
+        status: 'ready',
+        value: monitorSnapshotValue(),
+        energy: {
+          range: '30d',
+          from: '',
+          to: '',
+          groupBy,
+          status: 'ready',
+          value: {
+            from: '2026-10-01',
+            to: '2026-10-14',
+            days,
+            totalWh: 14000,
+            averageWh: 1000,
+            pricePerKwh: 0.5,
+            totalCost: 7,
+            averageCost: 0.5,
+          },
+          error: null,
+          fetchedAt: 0,
+          priceDraft: '',
+          priceSaving: false,
+          priceError: null,
+        },
+      },
+    })
+    return renderedElements(main.component({ store, t }), (element) => element.props?.className === 'dshMacToolsMonitorEnergyBar')
+  }
+  // 2026-10-01 is a Thursday: Sep 28, Oct 5 and Oct 12 are the three Mondays.
+  assert.equal(renderBars('day').length, 14, 'daily grouping keeps one bar per day')
+  assert.equal(renderBars('week').length, 3, 'weekly grouping collapses to three Monday-based buckets')
+})
+
+test('the status page renders a left sub-page rail and only the selected page', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const renderPage = (sub) => {
+    store.getSnapshot = () => ({
+      ...base,
+      monitor: { ...base.monitor, sub, status: 'ready', value: monitorSnapshotValue() },
+    })
+    return renderedStrings(main.component({ store, t }))
+  }
+  const overview = renderPage('overview')
+  for (const key of [
+    'monitor.subnav.overview',
+    'monitor.subnav.sensors',
+    'monitor.subnav.energy',
+    'monitor.subnav.fan',
+    'monitor.subnav.processes',
+    'monitor.subnav.alerts',
+    'monitor.subnav.system',
+  ]) {
+    assert.ok(overview.includes(key), `the rail must render ${key}`)
+  }
+  assert.ok(overview.includes('monitor.cpu.title'), 'the overview page shows the CPU card')
+  assert.equal(overview.includes('monitor.sensors.title'), false, 'the overview page must not render the sensors section')
+  assert.equal(overview.includes('monitor.energy.title'), false, 'the overview page must not render the energy section')
+
+  const sensors = renderPage('sensors')
+  assert.ok(sensors.includes('monitor.sensors.title'), 'the sensors page shows the temperature section')
+  assert.ok(sensors.includes('monitor.power.section.title'), 'the sensors page shows power and cooling')
+  assert.equal(sensors.includes('monitor.cpu.title'), false, 'the sensors page must not render the overview cards')
+
+  const energy = renderPage('energy')
+  assert.ok(energy.includes('monitor.energy.title'))
+  assert.equal(energy.includes('monitor.sensors.title'), false)
+
+  const fan = renderPage('fan')
+  assert.ok(fan.includes('monitor.fan.title'))
+  assert.equal(fan.includes('monitor.energy.title'), false)
+
+  const alerts = renderPage('alerts')
+  assert.ok(alerts.includes('monitor.alerts.title'))
+
+  const system = renderPage('system')
+  assert.ok(system.includes('monitor.system.title'))
+  assert.equal(system.includes('monitor.fan.title'), false)
+
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: { ...base.monitor, sub: 'overview', status: 'ready', value: monitorSnapshotValue() },
+  })
+  const tree = main.component({ store, t })
+  const railButtons = renderedElements(tree, (element) => String(element.props?.className ?? '').includes('dshMacToolsMonitorSubnavItem'))
+  assert.equal(railButtons.length, 7, 'one rail button per sub-page')
+  const rail = renderedElements(tree, (element) => element.props?.className === 'dshMacToolsMonitorSubnav')
+  assert.equal(rail.length, 1, 'the rail is one labelled nav element')
+  assert.equal(rail[0].props['aria-label'], 'monitor.subnav.aria')
+})
+
+test('selecting the processes sub-page opens the ranking and leaving it stops the poll', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'monitorProcesses') return jsonResponse({ sampledAt: '2026-11-05T06:00:00.000Z', sort: 'cpu', count: 0, processes: [] })
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  assert.equal(await store.loadMonitor(), true)
+  store.setMonitorSub('processes')
+  await flushAsync()
+  assert.equal(store.getSnapshot().monitor.sub, 'processes')
+  assert.equal(store.getSnapshot().monitor.processes.open, true, 'the ranking opens with its sub-page')
+  assert.equal(recorder.calls.filter((call) => call.body.endpoint === 'monitorProcesses').length, 1, 'the first ranking read is seeded')
+  store.setMonitorSub('overview')
+  assert.equal(store.getSnapshot().monitor.processes.open, false, 'leaving the page stops the 3 s poll')
+})
+
+test('the overview renders the compact fan card with a slider and quick actions', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: { ...base.monitor, sub: 'overview', status: 'ready', value: monitorSnapshotValue() },
+  })
+  const tree = main.component({ store, t })
+  const strings = renderedStrings(tree)
+  for (const expected of ['monitor.fan.title', 'monitor.fan.quick.rpm', 'monitor.fan.quick.full', 'monitor.fan.mode.auto', '2220']) {
+    assert.ok(strings.includes(expected), `expected the fan card to render ${expected}`)
+  }
+  const sliders = renderedElements(tree, (element) => element.type === 'input' && element.props?.type === 'range')
+  assert.equal(sliders.length, 1, 'the compact card owns one RPM slider')
+  assert.equal(sliders[0].props.min, 1000)
+  assert.equal(sliders[0].props.max, 4900)
+
+  // Control not installed yet: the card explains and links to the fan sub-page.
+  const fixtureFanControl = monitorSnapshotValue().fanControl
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor,
+      sub: 'overview',
+      status: 'ready',
+      value: monitorSnapshotValue({
+        fanControl: Object.assign({}, fixtureFanControl, { state: 'not-installed', installed: false, running: false }),
+      }),
+    },
+  })
+  const notReady = renderedStrings(main.component({ store, t }))
+  assert.ok(notReady.includes('monitor.fan.quick.open'), 'the card links to the fan sub-page')
+  assert.equal(notReady.includes('monitor.fan.quick.full'), false, 'no quick action without control')
+})
+
+test('every chart carries a timeline', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const setSnapshot = (monitorPatch) => {
+    store.getSnapshot = () => ({ ...base, monitor: { ...base.monitor, status: 'ready', ...monitorPatch } })
+    return main.component({ store, t })
+  }
+
+  const overview = setSnapshot({ sub: 'overview', value: monitorSnapshotValue() })
+  const timelines = renderedElements(overview, (element) => element.props?.className === 'dshMacToolsMonitorTimeline')
+  assert.equal(timelines.length, 4, 'the four overview sparklines carry a clock timeline')
+  assert.equal(timelines[0].props.children.length, 3, 'the timeline shows start / middle / end clocks')
+
+  const sensors = setSnapshot({ sub: 'sensors', value: monitorSnapshotValue() })
+  const sensorStrings = renderedStrings(sensors)
+  assert.ok(
+    sensorStrings.includes('monitor.power.scatter.timeRange'),
+    'the correlation scatters carry the sample time window',
+  )
+
+  const energy = setSnapshot({
+    sub: 'energy',
+    value: monitorSnapshotValue(),
+    energy: {
+      range: '7d',
+      from: '',
+      to: '',
+      groupBy: 'day',
+      status: 'ready',
+      value: monitorEnergyRangeValue(),
+      error: null,
+      fetchedAt: 0,
+      priceDraft: '',
+      priceSaving: false,
+      priceError: null,
+    },
+  })
+  const energyStrings = renderedStrings(energy)
+  assert.ok(energyStrings.includes('2026-10-30'), 'the energy timeline starts at the first bucket')
+  assert.ok(energyStrings.includes('2026-11-02'), 'the energy timeline ends at the last bucket')
+})
+
+test('the process ranking sorts by clicking a column header', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'monitorProcesses') {
+      return jsonResponse({ sampledAt: 'now', sort: body.payload.sort, order: body.payload.order, count: 0, processes: [] })
+    }
+    return jsonResponse({})
+  })
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+  assert.equal(await store.loadMonitor(), true)
+  store.setMonitorSub('processes')
+  await flushAsync()
+  const first = recorder.calls.find((call) => call.body.endpoint === 'monitorProcesses')
+  assert.deepEqual(first.body.payload, { sort: 'cpu', order: 'desc' }, 'the sub-page seeds the default ranking')
+
+  // A second click on the active column reverses the direction.
+  store.setMonitorProcessSort('cpu')
+  assert.equal(store.getSnapshot().monitor.processes.order, 'asc')
+  await flushAsync()
+  // A different column starts in its natural direction.
+  store.setMonitorProcessSort('name')
+  assert.equal(store.getSnapshot().monitor.processes.sort, 'name')
+  assert.equal(store.getSnapshot().monitor.processes.order, 'asc')
+  store.setMonitorProcessSort('rss')
+  assert.equal(store.getSnapshot().monitor.processes.sort, 'rss')
+  assert.equal(store.getSnapshot().monitor.processes.order, 'desc')
+})
+
+test('the process ranking exposes sortable column headers and a PID column', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const processRows = {
+    sampledAt: 'now',
+    sort: 'cpu',
+    order: 'desc',
+    count: 2,
+    processes: [
+      { pid: 1035, name: 'Macs Fan Control', cpuPercent: 12.3, memoryPercent: 1.2, rssBytes: 132512512, user: 'tester', killable: true },
+      { pid: 1, name: 'launchd', cpuPercent: 0, memoryPercent: 0.1, rssBytes: 1024, user: 'root', killable: false },
+    ],
+  }
+  store.getSnapshot = () => ({
+    ...base,
+    monitor: {
+      ...base.monitor,
+      sub: 'processes',
+      status: 'ready',
+      value: monitorSnapshotValue(),
+      processes: { ...base.monitor.processes, open: true, status: 'ready', value: processRows },
+    },
+  })
+  const tree = main.component({ store, t })
+  const headers = renderedElements(tree, (element) => String(element.props?.className ?? '').includes('dshMacToolsMonitorProcessSortButton'))
+  assert.equal(headers.length, 5, 'name / pid / cpu / memory / rss are sortable')
+  assert.equal(headers.filter((element) => element.props['aria-pressed'] === true).length, 1, 'exactly one active sort column')
+  assert.ok(renderedStrings(tree).includes('1035'), 'the PID column renders the pid')
+})
+
+test('the fan 自动 control applies the temperature curve, not the system auto', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'fanApply') return jsonResponse(Object.assign({}, monitorSnapshotValue().fanControl, { mode: body.payload.mode }))
+    return jsonResponse({})
+  })
+  const applied = applyClient({ fetch: recorder.fetch })
+  const store = injectedStore(applied.state)
+  assert.equal(await store.loadMonitor(), true)
+  store.setMonitorSub('fan')
+  const main = applied.state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const render = () => main.component({ store, t })
+  const buttons = renderedElements(render(), (element) => element.type === 'button')
+  const byLabel = (label) => buttons.find((element) => element.children[0] === label)
+
+  const autoButton = byLabel('monitor.fan.mode.auto')
+  assert.ok(autoButton, 'the 自动 mode button is rendered')
+  autoButton.props.onClick()
+  await flushAsync()
+  let posted = recorder.calls.filter((call) => call.body.endpoint === 'fanApply')
+  assert.equal(posted.length, 1, '自动 posts exactly one fan apply')
+  assert.equal(posted[0].body.payload.mode, 'curve', '自动 is the temperature curve')
+  assert.equal(posted[0].body.payload.sensor, 'cpuPerformance')
+  assert.equal(posted[0].body.payload.points.length, 4)
+
+  const manualButton = byLabel('monitor.fan.mode.manual')
+  assert.ok(manualButton, 'the 手动 mode button is rendered')
+  manualButton.props.onClick()
+  await flushAsync()
+  posted = recorder.calls.filter((call) => call.body.endpoint === 'fanApply')
+  assert.equal(posted[1].body.payload.mode, 'manual')
+
+  const restoreButton = byLabel('monitor.fan.restoreAuto')
+  assert.ok(restoreButton, '恢复系统自动 is still offered')
+  restoreButton.props.onClick()
+  await flushAsync()
+  posted = recorder.calls.filter((call) => call.body.endpoint === 'fanApply')
+  assert.equal(posted[2].body.payload.mode, 'auto', '恢复系统自动 hands the fan back to the SMC')
+})
+
+test('the overview fan card 自动 applies the temperature curve', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'monitor') return jsonResponse(monitorSnapshotValue())
+    if (body.endpoint === 'fanApply') return jsonResponse(monitorSnapshotValue().fanControl)
+    return jsonResponse({})
+  })
+  const applied = applyClient({ fetch: recorder.fetch })
+  const store = injectedStore(applied.state)
+  assert.equal(await store.loadMonitor(), true)
+  const main = applied.state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const tree = main.component({ store, t })
+  const buttons = renderedElements(tree, (element) => element.type === 'button')
+  const autoButton = buttons.find((element) => element.children[0] === 'monitor.fan.mode.auto')
+  assert.ok(autoButton, 'the compact card renders the 自动 action')
+  autoButton.props.onClick()
+  await flushAsync()
+  const posted = recorder.calls.filter((call) => call.body.endpoint === 'fanApply')
+  assert.equal(posted.length, 1)
+  assert.equal(posted[0].body.payload.mode, 'curve', 'the compact 自动 follows the temperature curve')
+  assert.equal(posted[0].body.payload.sensor, 'cpuPerformance')
+  assert.equal(posted[0].body.payload.points.length, 4)
 })
 
 test('the monitor source and stylesheet keep the bundle constraints', () => {
   assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorOverview'), 'the overview grid must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorSubnav'), 'the sub-page rail must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorTimeline'), 'the chart timelines must be styled')
+  assert.ok(CLIENT_SOURCE.includes('function MonitorFanQuickCard'), 'the compact fan card must exist')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorProcessSortButton'), 'the sortable process headers must be styled')
+  assert.ok(CLIENT_SOURCE.includes('function MonitorEnergySection'), 'the energy section must exist')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorPowerCharts'), 'the power charts must be styled')
+  assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorScatterDot'), 'the scatter dots must be styled')
+  assert.ok(CLIENT_SOURCE.includes('function MonitorPowerSection'), 'the power section must exist')
+  assert.ok(CLIENT_SOURCE.includes('h(MonitorPowerSection'), 'the power section must be mounted')
   assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorCurveSvg'), 'the curve editor must be styled')
   assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorProcessRow'), 'the process ranking must be styled')
   assert.ok(CLIENT_SOURCE.includes('.dshMacToolsMonitorAlertGrid'), 'the alert form must be styled')
@@ -2533,7 +3237,7 @@ test('the merged system-information section renders hardware, runtime and capabi
   const ready = renderTexts({
     ...base,
     host: { kind: 'ready', value: hostValue, http: 200, message: '' },
-    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+    monitor: { ...base.monitor, sub: 'system', status: 'ready', value: monitorSnapshotValue() },
   })
   for (const key of [
     'monitor.system.title',
@@ -2582,8 +3286,16 @@ test('the merged system-information section renders hardware, runtime and capabi
   for (const gone of ['system.memory', 'system.disk', 'system.battery', 'system.cpu', 'system.capabilityScreenshot']) {
     assert.equal(ready.includes(gone), false, `the merged section must not render ${gone}`)
   }
+  // The overview cards live on their own sub-page now; the system sub-page
+  // must not duplicate them.
+  const overviewTexts = renderTexts({
+    ...base,
+    host: { kind: 'ready', value: hostValue, http: 200, message: '' },
+    monitor: { ...base.monitor, sub: 'overview', status: 'ready', value: monitorSnapshotValue() },
+  })
   for (const overviewKey of ['monitor.cpu.title', 'monitor.memory.title', 'monitor.disk.title', 'monitor.network.title']) {
-    assert.ok(ready.includes(overviewKey), `the overview card ${overviewKey} must stay`)
+    assert.ok(overviewTexts.includes(overviewKey), `the overview card ${overviewKey} must stay`)
+    assert.equal(ready.includes(overviewKey), false, `the system sub-page must not render ${overviewKey}`)
   }
 })
 
@@ -2603,7 +3315,7 @@ test('the system-information section degrades when Host status is unavailable', 
   const loading = renderTexts({
     ...base,
     host: { kind: 'loading', value: null, http: 0, message: '' },
-    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+    monitor: { ...base.monitor, sub: 'system', status: 'ready', value: monitorSnapshotValue() },
   })
   assert.ok(loading.includes('monitor.system.title'))
   assert.ok(loading.includes('host.loading'), 'capability rows must degrade to the loading copy')
@@ -2613,7 +3325,7 @@ test('the system-information section degrades when Host status is unavailable', 
   const missing = renderTexts({
     ...base,
     host: { kind: 'missing', value: null, http: 404, message: 'no route' },
-    monitor: { ...base.monitor, status: 'ready', value: monitorSnapshotValue() },
+    monitor: { ...base.monitor, sub: 'system', status: 'ready', value: monitorSnapshotValue() },
   })
   assert.ok(missing.includes('monitor.system.title'))
   assert.ok(missing.includes('system.unknown'))
@@ -2627,4 +3339,454 @@ test('the system-information section degrades when Host status is unavailable', 
   })
   assert.equal(skeleton.includes('monitor.system.title'), false, 'the merged section waits for the first status snapshot')
   assert.ok(skeleton.includes('monitor.loading'))
+})
+
+test('the files dictionaries are complete in both languages', () => {
+  const { state } = applyClient()
+  const { zh, en } = state.locales[0].dictionaries
+  const zhKeys = Object.keys(zh).filter((key) => key === 'tab.files' || key.startsWith('files.')).sort()
+  const enKeys = Object.keys(en).filter((key) => key === 'tab.files' || key.startsWith('files.')).sort()
+  assert.deepEqual(zhKeys, enKeys, 'both languages must define the same files keys')
+  assert.ok(zhKeys.length > 80, `expected a complete files dictionary, got ${zhKeys.length} keys`)
+  for (const key of zhKeys) {
+    assert.equal(typeof zh[key], 'string', `zh.${key} must be a string`)
+    assert.equal(typeof en[key], 'string', `en.${key} must be a string`)
+    assert.notEqual(zh[key].trim(), '', `zh.${key} must not be empty`)
+    assert.notEqual(en[key].trim(), '', `en.${key} must not be empty`)
+  }
+  for (const required of [
+    'tab.files',
+    'files.toolbar.newFolder',
+    'files.action.trash',
+    'files.preview.title',
+    'files.dialog.trashMessage',
+    'files.error.unavailable',
+    'files.dropActive',
+    'files.kind.directory',
+    'files.toast.compressed',
+    'files.view.list',
+    'files.view.icons',
+    'files.view.gallery',
+    'files.view.aria',
+  ]) {
+    assert.ok(zhKeys.includes(required), `the files dictionary must define ${required}`)
+  }
+})
+
+test('the files store loads places, lists folders and applies mutations through the Host', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'filesPlaces') {
+      return jsonResponse({
+        startDirectory: '/Users/tester',
+        favorites: [{ id: 'home', name: 'Home', path: '/Users/tester' }],
+        volumes: [{ name: 'Macintosh HD', path: '/', totalBytes: 1000, freeBytes: 400, isRoot: true }],
+        recents: [],
+      })
+    }
+    if (body.endpoint === 'filesList') {
+      return jsonResponse({
+        path: body.payload.path,
+        name: body.payload.path === '/' ? '/' : 'tester',
+        parent: body.payload.path === '/' ? null : '/Users',
+        writable: true,
+        system: false,
+        freeBytes: 400,
+        totalBytes: 1000,
+        total: 2,
+        truncated: false,
+        entries: [
+          { name: 'Downloads', path: `${body.payload.path}/Downloads`, kind: 'directory', size: 0, mtime: '2026-01-01T00:00:00.000Z', ext: '', hidden: false, directory: true },
+          { name: 'notes.md', path: `${body.payload.path}/notes.md`, kind: 'file', size: 12, mtime: '2026-01-01T00:00:00.000Z', ext: 'md', hidden: false },
+        ],
+      })
+    }
+    if (body.endpoint === 'filesRead') {
+      return jsonResponse({ path: body.payload.path, name: 'notes.md', text: '# hi', bytes: 4, truncated: false, lines: 1 })
+    }
+    if (body.endpoint === 'filesTrash') {
+      return jsonResponse({ trashed: body.payload.paths.map((path) => ({ path, trashPath: `/Users/tester/.Trash/${path}` })), failed: [] })
+    }
+    if (body.endpoint === 'filesMkdir') {
+      return jsonResponse({ path: `${body.payload.path}/${body.payload.name}`, name: body.payload.name })
+    }
+    if (body.endpoint === 'filesRename') {
+      return jsonResponse({ path: body.payload.path, name: body.payload.name })
+    }
+    if (body.endpoint === 'filesCompress') return jsonResponse({ path: '/Users/tester/notes.zip', bytes: 128 })
+    if (body.endpoint === 'filesSend') return jsonResponse({ items: body.payload.paths.map((path, index) => ({ id: `o${index}`, path })), count: body.payload.paths.length })
+    if (body.endpoint === 'clipboard') return jsonResponse({ action: 'write', text: body.payload.text, bytes: 1 })
+    if (body.endpoint === 'filesOpen') return jsonResponse({ opened: true, path: body.payload.path })
+    return jsonResponse({})
+  })
+  const calls = recorder.calls
+  const store = injectedStore(applyClient({ fetch: recorder.fetch }).state)
+
+  assert.equal(await store.loadFilesPlaces(), true)
+  let snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.places.status, 'ready')
+  assert.equal(snapshot.files.places.favorites[0].id, 'home')
+  assert.equal(snapshot.files.places.volumes[0].freeBytes, 400)
+  assert.equal(snapshot.files.places.startDirectory, '/Users/tester')
+
+  assert.equal(await store.listFiles('/Users/tester'), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.path, '/Users/tester')
+  assert.equal(snapshot.files.listing.status, 'ready')
+  assert.equal(snapshot.files.listing.entries.length, 2)
+  assert.equal(snapshot.files.listing.writable, true)
+  assert.equal(snapshot.files.listing.freeBytes, 400)
+
+  // Navigating pushes the previous folder onto the back stack.
+  assert.equal(await store.listFiles('/Users/tester/Downloads'), true)
+  snapshot = store.getSnapshot()
+  assert.deepEqual(Array.from(snapshot.files.back), ['/Users/tester'])
+  assert.deepEqual(Array.from(snapshot.files.forward), [])
+  await store.filesGoBack()
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.path, '/Users/tester')
+  assert.deepEqual(Array.from(snapshot.files.forward), ['/Users/tester/Downloads'])
+
+  // A single click selects and previews a text file.
+  const rows = snapshot.files.listing.entries
+  store.filesSelect(rows[1].path, 'single', rows)
+  assert.deepEqual(Array.from(store.getSnapshot().files.selection), [rows[1].path])
+  assert.equal(await store.filesPreview(rows[1]), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.preview.kind, 'text')
+  assert.equal(snapshot.files.preview.text, '# hi')
+
+  // An image row is previewed through the authenticated file URL.
+  const imageEntry = { name: 'a.png', path: '/Users/tester/a.png', kind: 'file', size: 10, mtime: '2026-01-01T00:00:00.000Z', ext: 'png', hidden: false }
+  await store.filesPreview(imageEntry)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.preview.kind, 'image')
+  assert.match(snapshot.files.preview.url, /\/api\/dsh-mac-tools\?file=/u)
+
+  // New folder and rename dialogs post their endpoints and refresh the listing.
+  store.filesOpenDialog('newFolder')
+  store.filesSetDialogValue('photos')
+  assert.equal(store.getSnapshot().files.dialog.value, 'photos')
+  assert.equal(await store.filesConfirmDialog(), true)
+  snapshot = store.getSnapshot()
+  assert.equal(snapshot.files.dialog, null)
+  assert.equal(snapshot.files.toast.key, 'files.toast.created')
+  assert.ok(calls.some((call) => call.body.endpoint === 'filesMkdir' && call.body.payload.name === 'photos'))
+
+  store.filesOpenDialog('rename', { path: '/Users/tester/notes.md', value: 'todo.md' })
+  assert.equal(await store.filesConfirmDialog(), true)
+  assert.ok(calls.some((call) => call.body.endpoint === 'filesRename' && call.body.payload.name === 'todo.md'))
+
+  // Trash, compress and send-to-phone are one round-trip each with a toast.
+  store.filesOpenDialog('trash', { paths: ['/Users/tester/notes.md'] })
+  assert.equal(await store.filesConfirmDialog(), true)
+  assert.equal(store.getSnapshot().files.toast.key, 'files.toast.trashed')
+  assert.ok(calls.some((call) => call.body.endpoint === 'filesTrash'))
+
+  assert.equal(await store.filesCompress(['/Users/tester/notes.md']), true)
+  assert.equal(store.getSnapshot().files.toast.key, 'files.toast.compressed')
+  assert.equal(await store.filesSend(['/Users/tester/notes.md']), true)
+  assert.equal(store.getSnapshot().files.toast.key, 'files.toast.sent')
+
+  assert.equal(await store.filesCopyPath(['/Users/tester/notes.md']), true)
+  const clipboard = calls.filter((call) => call.body.endpoint === 'clipboard').pop()
+  assert.equal(clipboard.body.payload.text, '/Users/tester/notes.md')
+
+  assert.equal(await store.filesOpenPath('/Users/tester/notes.md'), true)
+  assert.ok(calls.some((call) => call.body.endpoint === 'filesOpen'))
+})
+
+test('the files store imports dropped files through filesDrop', async () => {
+  const recorder = hostRecorder((body) => {
+    if (body.endpoint === 'filesList') {
+      return jsonResponse({ path: body.payload.path, parent: '/', writable: true, system: false, freeBytes: 1, totalBytes: 2, total: 0, truncated: false, entries: [] })
+    }
+    if (body.endpoint === 'filesDrop') {
+      return jsonResponse({ saved: body.payload.files.map((file) => ({ name: file.name, path: `${body.payload.directory}/${file.name}`, bytes: 3 })), failed: [] })
+    }
+    return jsonResponse({})
+  })
+  const calls = recorder.calls
+  class FakeFileReader {
+    readAsDataURL() {
+      this.result = 'data:text/plain;base64,QUJD'
+      if (typeof this.onload === 'function') this.onload()
+    }
+  }
+  const store = injectedStore(applyClient({ fetch: recorder.fetch, FileReader: FakeFileReader }).state)
+  await store.listFiles('/Users/tester')
+
+  assert.equal(await store.filesDropFiles([{ name: 'dropped.txt' }]), true)
+  const drop = calls.find((call) => call.body.endpoint === 'filesDrop')
+  assert.equal(drop.body.payload.directory, '/Users/tester')
+  assert.equal(drop.body.payload.files[0].name, 'dropped.txt')
+  assert.equal(drop.body.payload.files[0].dataBase64, 'QUJD')
+  assert.equal(store.getSnapshot().files.toast.key, 'files.toast.dropped')
+})
+
+test('the files tab renders every documented state without throwing', () => {
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+
+  const entries = [
+    { name: 'Downloads', path: '/Users/tester/Downloads', kind: 'directory', size: 0, mtime: '2026-01-01T00:00:00.000Z', ext: '', hidden: false, directory: true },
+    { name: 'notes.md', path: '/Users/tester/notes.md', kind: 'file', size: 12, mtime: '2026-01-01T00:00:00.000Z', ext: 'md', hidden: false },
+    { name: 'photo.png', path: '/Users/tester/photo.png', kind: 'file', size: 2048, mtime: '2026-01-01T00:00:00.000Z', ext: 'png', hidden: false },
+    { name: 'scan.pdf', path: '/Users/tester/scan.pdf', kind: 'file', size: 4096, mtime: '2026-01-01T00:00:00.000Z', ext: 'pdf', hidden: false },
+  ]
+  const places = {
+    status: 'ready',
+    error: null,
+    favorites: [{ id: 'home', name: 'Home', path: '/Users/tester' }],
+    volumes: [{ name: 'Macintosh HD', path: '/', totalBytes: 1000, freeBytes: 400, isRoot: true }],
+    recents: [{ name: 'tester', path: '/Users/tester', at: '2026-01-01T00:00:00.000Z' }],
+    startDirectory: '/Users/tester',
+  }
+  const listing = (patch) => ({
+    status: 'ready',
+    entries,
+    parent: '/Users',
+    writable: true,
+    system: false,
+    freeBytes: 400,
+    totalBytes: 1000,
+    truncated: false,
+    total: entries.length,
+    error: null,
+    ...patch,
+  })
+  const preview = (patch) => ({
+    status: 'ready',
+    entry: entries[1],
+    kind: 'text',
+    text: '# hi',
+    truncated: false,
+    url: '',
+    error: null,
+    ...patch,
+  })
+  const renderWith = (filesPatch, extra) => {
+    const next = JSON.parse(JSON.stringify({
+      ...base,
+      files: { ...base.files, places, path: '/Users/tester', listing: listing({}), ...filesPatch },
+      ...(extra === undefined ? {} : extra),
+    }))
+    store.getSnapshot = () => next
+    assert.doesNotThrow(
+      () => renderElementTree(main.component({ store, t })),
+      `rendering the panel with files ${JSON.stringify(Object.keys(filesPatch))} must not throw`,
+    )
+  }
+
+  renderWith({})
+  renderWith({ places: { ...places, status: 'loading' } })
+  renderWith({ listing: listing({ status: 'loading', entries: [] }) })
+  renderWith({ listing: listing({ status: 'error', entries: [], error: { code: 'files_not_found', message: 'gone', details: {} } }) })
+  renderWith({ listing: listing({ entries: [] }) })
+  renderWith({ listing: listing({ writable: false, system: true }), selection: ['/Users/tester/notes.md'] })
+  renderWith({ preview: preview({ kind: 'image', url: '/api/dsh-mac-tools?file=x' }) })
+  renderWith({ preview: preview({ kind: 'thumb', url: '/api/dsh-mac-tools?thumb=x' }) })
+  renderWith({ preview: preview({ kind: 'text', truncated: true, bytes: 256 * 1024 }) })
+  renderWith({ preview: preview({ kind: 'directory', entry: entries[0] }) })
+  renderWith({ preview: preview({ status: 'loading', kind: 'none', entry: null }) })
+  renderWith({ preview: preview({ status: 'error', error: { code: 'files_binary', message: 'binary', details: {} } }) })
+  renderWith({ dialog: { kind: 'newFolder', value: 'photos' } })
+  renderWith({ dialog: { kind: 'rename', value: 'todo.md', path: '/Users/tester/notes.md' } })
+  renderWith({ dialog: { kind: 'trash', paths: ['/Users/tester/notes.md'] } })
+  renderWith({ toast: { key: 'files.toast.compressed', params: { path: '/Users/tester/a.zip' }, kind: 'success' } })
+  renderWith({ toast: { key: 'files.error.action', params: { message: 'nope' }, kind: 'error' }, actionError: { code: 'files_failed', message: 'nope', details: {} } })
+  renderWith({ upload: { active: true, done: 1, total: 3 } })
+  renderWith({}, { host: { kind: 'ready', value: { version: '0.3.2', capabilities: { files: true } }, http: 200, message: '' } })
+  assert.doesNotThrow(
+    () => renderElementTree(main.component({ store: Object.assign({}, store, { getSnapshot: () => ({
+      ...base,
+      host: { kind: 'ready', value: { version: '0.3.2', capabilities: { files: false } }, http: 200, message: '' },
+      files: { ...base.files, places, path: '/Users/tester', listing: listing({}) },
+    }) }), t })),
+    'rendering an unavailable Files tab must not throw',
+  )
+})
+
+test('the files store switches layouts and builds image URLs', () => {
+  const store = injectedStore(applyClient().state)
+  assert.equal(store.getSnapshot().files.view, 'list')
+  store.filesSetView('icons')
+  assert.equal(store.getSnapshot().files.view, 'icons')
+  store.filesSetView('gallery')
+  assert.equal(store.getSnapshot().files.view, 'gallery')
+  store.filesSetView('carousel')
+  assert.equal(store.getSnapshot().files.view, 'gallery', 'unsupported layouts are ignored')
+  store.filesSetView('list')
+  assert.equal(store.getSnapshot().files.view, 'list')
+
+  const url = store.filesImageUrl({ path: '/Users/tester/a b.png', mtime: '2026-01-01T00:00:00.000Z' })
+  assert.match(url, /^\/api\/dsh-mac-tools\?file=/u)
+  assert.match(url, /a%20b\.png/u)
+  assert.match(url, /&t=\d+/u)
+  assert.equal(store.filesImageUrl(null), '')
+  assert.equal(store.filesImageUrl({}), '')
+})
+
+test('the files layouts render the expected containers and colored icons', () => {
+  /** Expand function components so a test can inspect host elements. */
+  const expand = (element, depth = 0) => {
+    if (depth > 40) throw new Error('element tree is deeper than the panel should be')
+    if (element === null || element === undefined) return []
+    if (typeof element === 'string' || typeof element === 'number') return [String(element)]
+    if (Array.isArray(element)) return element.flatMap((child) => expand(child, depth + 1))
+    if (typeof element.type === 'function') return expand(element.type(element.props), depth + 1)
+    return [element, ...element.children.flatMap((child) => expand(child, depth + 1))]
+  }
+  const classNames = (element) => expand(element)
+    .map((node) => (node !== null && typeof node === 'object' && node.props !== null && typeof node.props === 'object'
+      ? node.props.className
+      : undefined))
+    .filter((name) => typeof name === 'string')
+  const hasClass = (names, className) => names.some((name) => name.split(' ').indexOf(className) >= 0)
+
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const entries = [
+    { name: 'Downloads', path: '/Users/tester/Downloads', kind: 'directory', size: 0, mtime: '2026-01-01T00:00:00.000Z', ext: '', hidden: false, directory: true },
+    { name: 'photo.png', path: '/Users/tester/photo.png', kind: 'file', size: 2048, mtime: '2026-01-01T00:00:00.000Z', ext: 'png', hidden: false },
+    { name: 'notes.md', path: '/Users/tester/notes.md', kind: 'file', size: 12, mtime: '2026-01-01T00:00:00.000Z', ext: 'md', hidden: false },
+  ]
+  const places = {
+    status: 'ready',
+    error: null,
+    favorites: [{ id: 'home', name: 'Home', path: '/Users/tester' }],
+    volumes: [],
+    recents: [],
+    startDirectory: '/Users/tester',
+  }
+  const render = (view) => {
+    const next = JSON.parse(JSON.stringify({
+      ...base,
+      files: {
+        ...base.files,
+        view,
+        places,
+        path: '/Users/tester',
+        listing: {
+          status: 'ready',
+          entries,
+          parent: '/Users',
+          writable: true,
+          system: false,
+          freeBytes: 400,
+          totalBytes: 1000,
+          truncated: false,
+          total: entries.length,
+          error: null,
+        },
+      },
+    }))
+    store.getSnapshot = () => next
+    return classNames(main.component({ store, t }))
+  }
+
+  const list = render('list')
+  assert.equal(hasClass(list, 'dshMacToolsFilesList'), true)
+  assert.equal(hasClass(list, 'dshMacToolsFilesGrid'), false)
+  assert.equal(hasClass(list, 'dshMacToolsFilesIcon-directory'), true, 'folders get their own accent color')
+  assert.equal(hasClass(list, 'dshMacToolsFilesIcon-image'), true, 'images get their own accent color')
+
+  const icons = render('icons')
+  assert.equal(hasClass(icons, 'dshMacToolsFilesGrid'), true)
+  assert.equal(hasClass(icons, 'dshMacToolsFilesTile'), true)
+  assert.equal(hasClass(icons, 'dshMacToolsFilesTileName'), true)
+  assert.equal(hasClass(icons, 'dshMacToolsFilesThumbWrap'), true, 'raster images show a thumbnail tile')
+
+  const gallery = render('gallery')
+  assert.equal(hasClass(gallery, 'dshMacToolsFilesGallery'), true)
+  assert.equal(hasClass(gallery, 'dshMacToolsFilesGalleryStage'), true)
+  assert.equal(hasClass(gallery, 'dshMacToolsFilesStripItem'), true)
+  assert.equal(hasClass(gallery, 'dshMacToolsFilesBodyGallery'), true)
+})
+
+test('the files action row is always visible and arms once something is selected', () => {
+  /** Expand function components so a test can inspect host elements. */
+  const expand = (element, depth = 0) => {
+    if (depth > 40) throw new Error('element tree is deeper than the panel should be')
+    if (element === null || element === undefined) return []
+    if (typeof element === 'string' || typeof element === 'number') return [String(element)]
+    if (Array.isArray(element)) return element.flatMap((child) => expand(child, depth + 1))
+    if (typeof element.type === 'function') return expand(element.type(element.props), depth + 1)
+    return [element, ...element.children.flatMap((child) => expand(child, depth + 1))]
+  }
+
+  const { state } = applyClient()
+  const store = injectedStore(state)
+  const main = state.slots.find((slot) => slot.options.name === 'main')
+  const t = (key) => key
+  const base = store.getSnapshot()
+  const entries = [
+    { name: 'Downloads', path: '/Users/tester/Downloads', kind: 'directory', size: 0, mtime: '2026-01-01T00:00:00.000Z', ext: '', hidden: false, directory: true },
+    { name: 'notes.md', path: '/Users/tester/notes.md', kind: 'file', size: 12, mtime: '2026-01-01T00:00:00.000Z', ext: 'md', hidden: false },
+  ]
+  const places = {
+    status: 'ready',
+    error: null,
+    favorites: [{ id: 'home', name: 'Home', path: '/Users/tester' }],
+    volumes: [],
+    recents: [],
+    startDirectory: '/Users/tester',
+  }
+  const render = (selection) => {
+    const next = JSON.parse(JSON.stringify({
+      ...base,
+      files: {
+        ...base.files,
+        view: 'list',
+        places,
+        path: '/Users/tester',
+        selection,
+        listing: {
+          status: 'ready',
+          entries,
+          parent: '/Users',
+          writable: true,
+          system: false,
+          freeBytes: 400,
+          totalBytes: 1000,
+          truncated: false,
+          total: entries.length,
+          error: null,
+        },
+      },
+    }))
+    store.getSnapshot = () => next
+    return expand(main.component({ store, t }))
+  }
+  const findButton = (nodes, label) => nodes.find((node) => node !== null && typeof node === 'object'
+    && node.props !== null && typeof node.props === 'object'
+    && typeof node.props.className === 'string'
+    && node.props.className.indexOf('dshMacToolsButtonCompact') >= 0
+    && node.children[0] === label)
+  const hasClassContaining = (nodes, fragment) => nodes.some((node) => node !== null && typeof node === 'object'
+    && node.props !== null && typeof node.props === 'object'
+    && typeof node.props.className === 'string'
+    && node.props.className.indexOf(fragment) >= 0)
+
+  const idle = render([])
+  assert.equal(hasClassContaining(idle, 'dshMacToolsFilesSelectionBar'), true, 'the action row is always rendered')
+  assert.equal(hasClassContaining(idle, 'dshMacToolsFilesSelectionBarIdle'), true, 'it renders idle with no selection')
+  assert.equal(idle.includes('files.status.none'), true)
+  for (const label of ['files.action.open', 'files.action.copyPath', 'files.action.reveal', 'files.action.rename', 'files.action.compress', 'files.action.send', 'files.action.trash']) {
+    const button = findButton(idle, label)
+    assert.ok(button !== undefined, `${label} must stay visible when nothing is selected`)
+    assert.equal(button.props.disabled, true, `${label} must be disabled without a selection`)
+  }
+
+  const armed = render(['/Users/tester/notes.md'])
+  assert.equal(hasClassContaining(armed, 'dshMacToolsFilesSelectionBarIdle'), false)
+  assert.equal(armed.includes('files.status.selected'), true)
+  assert.equal(findButton(armed, 'files.action.open').props.disabled, false)
+  assert.equal(findButton(armed, 'files.action.rename').props.disabled, false)
+  assert.equal(findButton(armed, 'files.action.trash').props.disabled, false)
 })

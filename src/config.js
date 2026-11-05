@@ -32,6 +32,9 @@ export const CONFIG_DEFAULTS = Object.freeze({
   transferSessionMinutes: 30,
   transferMaxFileMB: 512,
   transferAutoCopyText: false,
+  filesStartDirectory: '',
+  filesShowHidden: false,
+  filesFavorites: [],
   monitorSampleMs: 1000,
   alertCpuPercent: 90,
   alertTemperatureCelsius: 95,
@@ -111,6 +114,19 @@ export const Config = Schema.object({
   transferAutoCopyText: Schema.boolean()
     .default(false)
     .description('Copy text received from the phone to the macOS clipboard automatically.'),
+  filesStartDirectory: Schema.string()
+    .default('')
+    .description(
+      'Directory the Files tab opens first, with `~` expanded. Empty means the home directory.',
+    ),
+  filesShowHidden: Schema.boolean()
+    .default(false)
+    .description('Whether the Files tab starts with hidden (dot) files visible. The panel toggle changes it at runtime.'),
+  filesFavorites: Schema.array(Schema.string())
+    .default([])
+    .description(
+      'Extra directories pinned in the Files tab sidebar, with `~` expanded, e.g. ["~/projects", "~/Downloads"] . The standard places (home, Desktop, Documents, Downloads, Pictures, Movies, Music, Applications) are always listed.',
+    ),
   alertNotify: Schema.boolean()
     .default(true)
     .description('Show a macOS notification when a monitor threshold alert fires. The panel can change it at runtime; the choice is persisted in the plugin state directory.'),
@@ -199,6 +215,17 @@ export function resolveConfig(rawConfig) {
   const transferAutoCopyText = typeof config.transferAutoCopyText === 'boolean'
     ? config.transferAutoCopyText
     : CONFIG_DEFAULTS.transferAutoCopyText
+  const filesStartDirectory = typeof config.filesStartDirectory === 'string'
+    ? config.filesStartDirectory.trim()
+    : CONFIG_DEFAULTS.filesStartDirectory
+  const filesShowHidden = typeof config.filesShowHidden === 'boolean'
+    ? config.filesShowHidden
+    : CONFIG_DEFAULTS.filesShowHidden
+  const filesFavorites = Array.isArray(config.filesFavorites)
+    ? config.filesFavorites
+      .filter((entry) => typeof entry === 'string' && entry.trim() !== '')
+      .map((entry) => entry.trim())
+    : CONFIG_DEFAULTS.filesFavorites
   const monitorSampleMs = Number.isFinite(config.monitorSampleMs)
     && /** @type {number} */ (config.monitorSampleMs) >= 500
     && /** @type {number} */ (config.monitorSampleMs) <= 10000
@@ -233,6 +260,9 @@ export function resolveConfig(rawConfig) {
     transferSessionMinutes,
     transferMaxFileMB,
     transferAutoCopyText,
+    filesStartDirectory,
+    filesShowHidden,
+    filesFavorites,
     monitorSampleMs,
     alertCpuPercent,
     alertTemperatureCelsius,

@@ -8,11 +8,12 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
+import { localDateKey } from '../src/energy.js'
 import {
   buildNotificationScript,
   describeAlert,
@@ -37,6 +38,9 @@ const HOST = Object.freeze({
   efficiencyCores: 6,
   uptimeSeconds: 1234,
 })
+
+/** One contract-shaped SoC power reading (watts, one decimal). */
+const POWER = Object.freeze({ cpuW: 13.7, gpuW: 3.6, aneW: 0, dramW: 2.5, socW: 19.8 })
 
 /**
  * Build one contract-shaped software sample.
@@ -92,7 +96,7 @@ function softwareSample(overrides = {}) {
 }
 
 /** Slim stand-ins for the sampler and the fan controller. */
-function fakeSampler({ fanCount = 1, temperatures = [{ key: 'Tp01', celsius: 75 }] } = {}) {
+function fakeSampler({ fanCount = 1, temperatures = [{ key: 'Tp01', celsius: 75 }], power = null } = {}) {
   const sample = {
     at: 1_761_220_000_000,
     fanCount,
@@ -100,6 +104,8 @@ function fakeSampler({ fanCount = 1, temperatures = [{ key: 'Tp01', celsius: 75 
       ? [{ index: 0, actualRpm: 2400, targetRpm: 2400, minRpm: 1000, maxRpm: 4900, mode: 'auto' }]
       : [],
     temperatures,
+    // The IOReport half of the sample; null means "the helper has no power".
+    power,
   }
   return {
     sample,
@@ -180,9 +186,9 @@ function fakeFans() {
  * Build a service with fakes and a controllable clock, plus cleanup.
  *
  * @param {object} [options] - test options.
- * @returns {{ service: MonitorService, sampler: object, fans: object, notifications: object[], clock: object }} fixture.
+ * @returns {{ service: MonitorService, sampler: object, fans: object, notifications: object[], clock: object, stateDirectory: string }} fixture.
  */
-function createFixture({ platform = 'darwin', fanCount = 1, software = undefined, sampler = undefined, fans = undefined } = {}) {
+function createFixture({ platform = 'darwin', fanCount = 1, power = null, software = undefined, sampler = undefined, fans = undefined } = {}) {
   const clock = { value: 1_761_220_000_000 }
   const notifications = []
   const stateDirectory = mkdtempSync(join(tmpdir(), 'dsh-monitor-test-'))
@@ -193,7 +199,7 @@ function createFixture({ platform = 'darwin', fanCount = 1, software = undefined
     platform,
     now: () => clock.value,
     warn: () => {},
-    sampler: sampler ?? fakeSampler({ fanCount }),
+    sampler: sampler ?? fakeSampler({ fanCount, power }),
     fanController: fans ?? fakeFans(),
     collectSoftware: async () => (typeof software === 'function' ? software(clock.value) : (software ?? softwareSample())),
     notify: async (event) => {
@@ -201,7 +207,7 @@ function createFixture({ platform = 'darwin', fanCount = 1, software = undefined
       return true
     },
   })
-  return { service, sampler: service.sampler, fans: service.fan, notifications, clock }
+  return { service, sampler: service.sampler, fans: service.fan, notifications, clock, stateDirectory }
 }
 
 test('the snapshot follows the client contract', async () => {
@@ -256,6 +262,247 @@ test('history keeps the ring at capacity and records one point per collection', 
     clock.value += 500
     await service.collectOnce()
     assert.equal(service.snapshot().history.cpu.length, HISTORY_CAPACITY, 'a throttled collect adds no point')
+  } finally {
+    service.dispose()
+  }
+})
+
+test('the sample carries the IOReport power block', async () => {
+  const { service } = createFixture({ power: POWER })
+  await service.start()
+  try {
+    const power = service.snapshot().sample.power
+    assert.deepEqual(power, {
+      available: true,
+      ...POWER,
+      energyWh: 0,
+      since: new Date(1_761_220_000_000).toISOString(),
+    })
+  } finally {
+    service.dispose()
+  }
+})
+
+test('energy accumulates from the tick clock', async () => {
+  const { service, clock } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    assert.equal(service.snapshot().sample.power.energyWh, 0, 'the first tick has no interval to integrate')
+    clock.value += 1000
+    await service.collectOnce()
+    // 18 W held for one second is 18 / 3600 Wh = 0.005 Wh.
+    assert.equal(service.snapshot().sample.power.energyWh, 0.005)
+    clock.value += 1000
+    await service.collectOnce()
+    assert.equal(service.snapshot().sample.power.energyWh, 0.01)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('energy keeps accumulating on software-throttled ticks', async () => {
+  const { service, clock, fans } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    const historyLength = service.snapshot().history.cpu.length
+    const fanTicks = fans.ticks
+    for (let index = 0; index < 3; index += 1) {
+      clock.value += 500
+      await service.collectOnce()
+    }
+    // The software sample is still cached (no new history point), but the
+    // energy counter must have integrated the 1.5 s of throttled ticks.
+    assert.equal(service.snapshot().history.cpu.length, historyLength, 'the software sample was throttled')
+    assert.equal(fans.ticks, fanTicks + 3, 'the fan curve was still fed')
+    assert.equal(service.snapshot().sample.power.energyWh, 0.0075)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('the snapshot carries the daily energy ledger summary', async () => {
+  const { service, clock, stateDirectory } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    assert.deepEqual(service.snapshot().energy, {
+      todayWh: 0, totalWh: 0, days: 0, since: null,
+      pricePerKwh: 0.5, costToday: 0, costTotal: 0,
+    })
+    const keys = Object.keys(service.snapshot())
+    assert.ok(keys.indexOf('energy') > keys.indexOf('history'), 'energy sits after history')
+    assert.ok(keys.indexOf('energy') < keys.indexOf('alerts'), 'energy sits before alerts')
+
+    clock.value += 1000
+    await service.collectOnce()
+    const today = localDateKey(clock.value)
+    assert.deepEqual(service.snapshot().energy, {
+      todayWh: 0.005, totalWh: 0.005, days: 1, since: today,
+      pricePerKwh: 0.5, costToday: 0, costTotal: 0,
+    })
+    const statePath = join(stateDirectory, 'energy.json')
+    assert.ok(existsSync(statePath), 'the first recorded tick persists the ledger')
+    assert.deepEqual(JSON.parse(readFileSync(statePath, 'utf8')).days, { [today]: 0.005 })
+  } finally {
+    service.dispose()
+  }
+})
+
+test('saving the electricity price updates the snapshot and persists it', async () => {
+  const { service, clock, stateDirectory } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    clock.value += 1000
+    await service.collectOnce()
+    // Make today's bucket a whole kWh so the 电费 is visible at four decimals.
+    service.energyLedger.record(999.995, clock.value)
+    const today = localDateKey(clock.value)
+
+    const saved = service.saveEnergyPrice(0.56)
+    assert.deepEqual(saved, {
+      todayWh: 1000, totalWh: 1000, days: 1, since: today,
+      pricePerKwh: 0.56, costToday: 0.56, costTotal: 0.56,
+    })
+    // The cheap snapshot poll and the range query read the same ledger state.
+    assert.deepEqual(service.snapshot().energy, saved)
+    assert.equal(service.energy().pricePerKwh, 0.56)
+    assert.equal(service.energy().totalCost, 0.56)
+
+    const file = JSON.parse(readFileSync(join(stateDirectory, 'energy.json'), 'utf8'))
+    assert.equal(file.pricePerKwh, 0.56, 'the saved price is durable')
+    assert.equal(file.days[today], 1000)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('every sampling tick is bucketed into the daily ledger', async () => {
+  const { service, clock } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    for (let index = 0; index < 4; index += 1) {
+      clock.value += 1000
+      await service.collectOnce()
+    }
+    // The 500 ms ticks are software-throttled, but the energy integration (and
+    // therefore the ledger) still runs on every tick.
+    for (let index = 0; index < 3; index += 1) {
+      clock.value += 500
+      await service.collectOnce()
+    }
+    const snapshot = service.snapshot()
+    assert.equal(snapshot.sample.power.energyWh, 0.0275)
+    assert.equal(snapshot.energy.todayWh, 0.0275)
+    assert.equal(service.energyLedger.snapshot().totalWh, 0.0275)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('the daily ledger rolls over at local midnight', async () => {
+  const { service, clock, stateDirectory } = createFixture({ power: { ...POWER, socW: 18 } })
+  // One second before local midnight: the first tick has no interval to
+  // integrate, but it pins the current local date.
+  clock.value = new Date(2026, 9, 23, 23, 59, 59).getTime()
+  await service.start()
+  try {
+    assert.equal(service.snapshot().energy.days, 0)
+    clock.value += 2000
+    await service.collectOnce()
+    assert.deepEqual(service.snapshot().energy, {
+      todayWh: 0.01, totalWh: 0.01, days: 1, since: '2026-10-24',
+      pricePerKwh: 0.5, costToday: 0, costTotal: 0,
+    })
+    const file = JSON.parse(readFileSync(join(stateDirectory, 'energy.json'), 'utf8'))
+    assert.deepEqual(Object.keys(file.days), ['2026-10-24'], 'the day rollover flushed immediately')
+    assert.equal(file.days['2026-10-24'], 0.01)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('dispose flushes the pending energy ledger', async () => {
+  const { service, clock, stateDirectory } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  const statePath = join(stateDirectory, 'energy.json')
+  try {
+    clock.value += 1000
+    await service.collectOnce()
+    clock.value += 1000
+    await service.collectOnce()
+    const today = localDateKey(clock.value)
+    // The second record lands inside the 30 s throttle window, so only dispose
+    // makes it durable.
+    assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).days[today], 0.005)
+    service.dispose()
+    assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).days[today], 0.01)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('the energy range query defaults to the last seven days', async () => {
+  const { service, clock } = createFixture({ power: { ...POWER, socW: 18 } })
+  clock.value = new Date(2026, 10, 5, 12, 0, 0).getTime()
+  await service.start()
+  try {
+    clock.value += 1000
+    await service.collectOnce()
+    const range = service.energy({ from: '2026-11-01', to: '2026-11-05' })
+    assert.equal(range.from, '2026-11-01')
+    assert.equal(range.to, '2026-11-05')
+    assert.deepEqual(range.days.map((day) => day.wh), [0, 0, 0, 0, 0.005])
+    assert.equal(range.totalWh, 0.005)
+    assert.equal(range.averageWh, 0.001)
+
+    const defaulted = service.energy()
+    assert.equal(defaulted.from, '2026-10-30')
+    assert.equal(defaulted.to, '2026-11-05')
+    assert.equal(defaulted.days.length, 7)
+    assert.equal(defaulted.days[defaulted.days.length - 1].wh, 0.005)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('history records power and fan rpm rings at capacity', async () => {
+  const { service, clock } = createFixture({ power: { ...POWER, socW: 18 } })
+  await service.start()
+  try {
+    for (let index = 0; index < HISTORY_CAPACITY + 5; index += 1) {
+      clock.value += 2000
+      await service.collectOnce()
+    }
+    const history = service.snapshot().history
+    assert.equal(history.power.length, HISTORY_CAPACITY)
+    assert.equal(history.fanRpm.length, HISTORY_CAPACITY)
+    assert.equal(history.power[history.power.length - 1].value, 18)
+    assert.equal(history.fanRpm[history.fanRpm.length - 1].value, 2400)
+    assert.ok(history.power.every((point) => point.value === 18))
+    assert.ok(history.fanRpm.every((point) => point.value === 2400))
+  } finally {
+    service.dispose()
+  }
+})
+
+test('a sampler without power reports an unavailable power block', async () => {
+  const { service, clock } = createFixture()
+  await service.start()
+  try {
+    const power = service.snapshot().sample.power
+    assert.equal(power.available, false)
+    assert.equal(power.cpuW, null)
+    assert.equal(power.gpuW, null)
+    assert.equal(power.aneW, null)
+    assert.equal(power.dramW, null)
+    assert.equal(power.socW, null)
+    assert.equal(power.energyWh, 0)
+    assert.equal(power.since, null)
+    clock.value += 1000
+    await service.collectOnce()
+    assert.equal(service.snapshot().sample.power.energyWh, 0, 'no wattage means no energy')
+    const history = service.snapshot().history
+    assert.equal(history.power[history.power.length - 1].value, null)
+    assert.equal(history.fanRpm[history.fanRpm.length - 1].value, 2400, 'fan RPM does not depend on power')
   } finally {
     service.dispose()
   }
@@ -348,6 +595,10 @@ test('process ranking and invalid kills are contained', async () => {
   try {
     const processes = await service.processes({ sort: 'cpu', limit: 5 })
     assert.equal(processes.sort, 'cpu')
+    assert.equal(processes.order, 'desc')
+    const byRss = await service.processes({ sort: 'rss', order: 'asc', limit: 3 })
+    assert.equal(byRss.sort, 'rss')
+    assert.equal(byRss.order, 'asc')
     assert.ok(Array.isArray(processes.processes))
     assert.ok(processes.processes.length <= 5)
     for (const row of processes.processes) {
@@ -432,7 +683,7 @@ test('monitor alert defaults stay aligned with the alert module', async () => {
 function fakeMonitorService({ failApply = false } = {}) {
   return {
     snapshot: () => ({ version: '9.9.9-test', sample: {}, capabilities: {}, history: {}, alerts: {}, fanControl: {} }),
-    processes: async ({ sort, limit }) => ({ sampledAt: 'now', sort, count: 1, processes: [{ pid: 2, name: 'x', cpuPercent: 1, memoryPercent: 1, rssBytes: 1, user: 'u', killable: true }], limit }),
+    processes: async ({ sort, order, limit }) => ({ sampledAt: 'now', sort, order, count: 1, processes: [{ pid: 2, name: 'x', cpuPercent: 1, memoryPercent: 1, rssBytes: 1, user: 'u', killable: true }], limit }),
     kill: async (pid) => ({ pid, name: 'x', signal: 'SIGTERM' }),
     saveAlertSettings: (patch) => ({ settings: { cpuPercent: patch.cpuPercent ?? 90 }, events: [] }),
     testAlert: async () => ({ notified: true }),
@@ -477,7 +728,14 @@ test('monitor endpoints are dispatched and failures keep their codes', async () 
     assert.equal((await ops.dispatch('monitor')).version, '9.9.9-test')
     const processes = await ops.dispatch('monitorProcesses', { sort: 'memory', limit: 5 })
     assert.equal(processes.sort, 'memory')
+    assert.equal(processes.order, 'desc', 'an omitted direction follows the key default')
     assert.equal(processes.limit, 5)
+    const byName = await ops.dispatch('monitorProcesses', { sort: 'name', order: 'asc', limit: 3 })
+    assert.equal(byName.sort, 'name')
+    assert.equal(byName.order, 'asc', 'the requested direction is forwarded')
+    const fallback = await ops.dispatch('monitorProcesses', { sort: 'bogus', order: 'sideways', limit: 3 })
+    assert.equal(fallback.sort, 'cpu')
+    assert.equal(fallback.order, 'desc')
     assert.equal((await ops.dispatch('monitorKill', { pid: 4242 })).pid, 4242)
     await assert.rejects(() => ops.dispatch('monitorKill', { pid: 0 }), (error) => error.code === 'invalid_request')
     await assert.rejects(() => ops.dispatch('monitorKill', { pid: 'x' }), (error) => error.code === 'invalid_request')
